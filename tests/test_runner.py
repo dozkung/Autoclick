@@ -17,12 +17,13 @@ from autoclicker import (
     win32,
 )
 from autoclicker import runner as runner_mod
-from support import FakeMouse, FakeWindows, cfg, step
+from support import FakeKeys, FakeMouse, FakeWindows, cfg, step
 
 
 class RunnerHarness:
-    def __init__(self, steps, config, mouse=None, origin=(0, 0), nudge=None, win=None):
+    def __init__(self, steps, config, mouse=None, origin=(0, 0), nudge=None, win=None, keys=None):
         self.mouse = mouse or FakeMouse()
+        self.keys = keys or FakeKeys()  # inject เสมอ ไม่งั้นรันเทสต์บน Windows จะไปกดปุ่มจริง
         self.done = threading.Event()
         self.reason = None
         self.statuses = []  # (รอบ, จุด, ครั้งที่, repeat)
@@ -42,6 +43,7 @@ class RunnerHarness:
             foreground=win.foreground_window,
             is_window=win.is_window,
             window_pid=win.window_pid,
+            key_sender=self.keys.send,
         )
 
     def _on_done(self, reason):

@@ -16,18 +16,35 @@ class _MOUSEINPUT(ctypes.Structure):
     ]
 
 
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", ctypes.c_ushort),
+        ("wScan", ctypes.c_ushort),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
 class _INPUT(ctypes.Structure):
     class _U(ctypes.Union):
-        _fields_ = [("mi", _MOUSEINPUT)]  # MOUSEINPUT ใหญ่สุดใน union อยู่แล้ว ขนาด INPUT จึงถูก
+        # MOUSEINPUT ใหญ่สุดใน union อยู่แล้ว ใส่ KEYBDINPUT เพิ่มขนาด INPUT ไม่เปลี่ยน
+        _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT)]
 
     _anonymous_ = ("u",)
     _fields_ = [("type", ctypes.c_ulong), ("u", _U)]
 
 
 _INPUT_MOUSE = 0
+_INPUT_KEYBOARD = 1
 
 
 _MOUSEEVENTF_MOVE = 0x0001
+
+_KEYEVENTF_EXTENDEDKEY = 0x0001
+_KEYEVENTF_KEYUP = 0x0002
+_KEYEVENTF_SCANCODE = 0x0008
+_MAPVK_VK_TO_VSC = 0
 
 
 class _BITMAPINFOHEADER(ctypes.Structure):

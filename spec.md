@@ -44,6 +44,7 @@ tests/
 ├── test_model.py  test_screen.py  test_hotkeys.py   # ไม่ต้อง stub อะไร
 ├── test_runner.py                                    # stub แค่ pynput
 ├── test_markers.py  test_dialogs.py  test_app.py     # stub tkinter + pynput
+├── test_keys.py                                      # step กดปุ่ม (Runner/App/StepDialog) stub tkinter + pynput
 └── test_structure.py    # ห้าม tkinter ใน logic, ห้าม import วน, DPI ต้องมาก่อน
 requirements.txt         # pynput, Pillow
 requirements-dev.txt     # + ruff
@@ -67,10 +68,12 @@ spec.md
 
 | field | type | กติกา |
 |---|---|---|
-| `x`, `y` | int | พิกัดจอแบบ physical pixel ห้ามอยู่ในโซน kill switch (ดู 5.5) ต้องเป็นจำนวนเต็มจริง ทศนิยมหรือ bool ไม่ผ่าน |
-| `type` | `"left" \| "right" \| "double" \| "hold"` | |
+| `x`, `y` | int หรือ null | พิกัดจอแบบ physical pixel ห้ามอยู่ในโซน kill switch (ดู 5.5) ต้องเป็นจำนวนเต็มจริง ทศนิยมหรือ bool ไม่ผ่าน · step กดปุ่ม (`type == "key"`) ต้องเป็น `null` |
+| `type` | `"left" \| "right" \| "double" \| "hold" \| "key"` | `key` = กดปุ่มคีย์บอร์ด (ดู 5.11) |
+| `key_vk` | int 1–254 | เฉพาะ `type == "key"`: Windows virtual key code ของปุ่มที่จะกด กติกาเดียวกับปุ่มลัด (ห้าม Ctrl/Alt/Shift เดี่ยว, Esc, ปุ่ม Windows) step คลิกไม่มี field นี้ |
+| `key_mods` | list ของ `"ctrl"`/`"alt"`/`"shift"` | เฉพาะ `type == "key"`: modifier ที่กดพร้อมกัน (ไม่มี = `[]`) |
 | `delay_ms` | int | เวลารอหลัง **คลิกครั้งสุดท้าย** ของจุดนี้ ก่อนไปจุดถัดไป ขั้นต่ำ 10 สูงสุด 86,400,000 (24 ชม.) |
-| `hold_ms` | int | ใช้เฉพาะ `type == "hold"` ขั้นต่ำ 0 สูงสุด 86,400,000 (24 ชม.) |
+| `hold_ms` | int | ใช้กับ `type == "hold"` (ค่าเริ่มต้น 500) และ `type == "key"` (กดปุ่มค้างนานเท่านี้ ค่าเริ่มต้น 50) ขั้นต่ำ 0 สูงสุด 86,400,000 (24 ชม.) |
 | `repeat` | int 1–1000 (ค่าเริ่มต้น 1) | จำนวนครั้งที่คลิกที่จุดนี้ |
 | `gap_ms` | int 10–60000 (ค่าเริ่มต้น 100) | เว้นระหว่างคลิกแต่ละครั้งในจุดเดียวกัน (ใช้เมื่อ `repeat > 1`) |
 
@@ -304,6 +307,36 @@ spec.md
   - **หน้าต่างเป้าหมายถูกปิด** (`IsWindow` = false ไม่ว่าจะกำลังทำงานหรือหยุดชั่วคราวอยู่): หยุดถาวร reason `หน้าต่างเป้าหมายถูกปิด`
 - **การทดสอบ:** `Runner(..., foreground=, is_window=, window_pid=)` inject ได้เหมือน `nudge` เทสต์ต้อง inject ตัวปลอมเสมอ ไม่งั้นจะไปอ่านหน้าต่างจริงของเครื่อง
 - **ข้อความระหว่างรัน:** ข้อความที่ไม่ใช่สถานะคลิก (นับถอยหลัง, หยุดชั่วคราว) ส่งผ่าน `on_notice(text)` → queue `("notice", text)` และใช้ status throttle แบบเดียวกับ `status`
+
+### 5.11 Step กดปุ่มคีย์บอร์ด (`type == "key"`)
+
+ใช้กับของในเกมที่กดด้วยคีย์บอร์ด เช่น ProximityPrompt ของ Roblox (ปุ่ม E) ตั้งลำดับแบบ คลิก → กด E → คลิก ได้
+
+- **เพิ่ม:** ปุ่ม "เพิ่มปุ่มคีย์บอร์ด…" ข้างปุ่ม "เพิ่มเอง" (เริ่มที่ปุ่ม E) หรือเปลี่ยนประเภทใน dialog เป็น "กดปุ่ม"
+  - dialog ซ่อนช่อง X/Y แสดงปุ่ม "เลือกปุ่ม…" กดแล้วจับปุ่มถัดไปผ่าน pynput listener ตัวเดียวกับปุ่มลัด (`App.begin_key_capture` / `end_key_capture`) ได้ vk ชุดเดียวกัน ระหว่างจับปุ่มลัดทุกตัวปิด Esc = ยกเลิก
+  - ระหว่างจับปุ่ม Enter/Esc ห้ามไปกดตกลง/ปิด dialog ปิด dialog กลางคันต้องเปิดปุ่มลัดคืน
+- **ไม่มีพิกัด:** ไม่มีหมุดบนจอ (หมุดของ step อื่นยังใช้เลข # ตามตาราง), ไม่เช็กนอกจอ/kill switch ตอนกดเริ่ม, ลากย้ายไม่ได้, ตารางคอลัมน์ X แสดงชื่อปุ่ม (เช่น `Ctrl+E`) คอลัมน์ Y แสดง `-` คอลัมน์ค้างแสดง `hold_ms`
+- `repeat` / `gap_ms` / `delay_ms` / jitter เวลา ใช้เหมือน step คลิก ส่วน jitter พิกัดและรอ hover ไม่เกี่ยว (ไม่ยุ่งกับเมาส์เลย)
+- **การกด (Runner):** เช็กหน้าต่างเป้าหมายก่อนกด (5.10) → กด mods ตามลำดับ Ctrl/Alt/Shift → กดปุ่ม → รอ `hold_ms` ผ่าน `_wait` → ปล่อยปุ่ม → ปล่อย mods ย้อนลำดับ
+  - ส่งด้วย `SendInput` แบบ **scan code** (`KEYEVENTF_SCANCODE`, scan code จาก `MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)`) **ห้ามใช้** `pynput.keyboard.Controller`: เกมอย่าง Roblox อ่านปุ่มจาก scan code ถ้าส่งแค่ vk เกมไม่รับ ถ้า MapVirtualKey คืน 0 ให้ส่ง vk แทน
+  - ลูกศร / Insert / Delete / Home / End / PageUp / PageDown / NumLock / Num / ต้องใส่ `KEYEVENTF_EXTENDEDKEY` (`EXTENDED_VKS`) ไม่งั้นกลายเป็นปุ่มบน numpad
+  - **ปล่อยทุกปุ่มเสมอ** (`_release_keys` ใน finally ของการกดและของ `run()`) แม้โดนหยุด/ชนมุม/ปล่อยตัวไหนพังก็ต้องปล่อยตัวที่เหลือต่อ ไม่งั้น Ctrl/Shift ค้างทั้งเครื่อง
+  - หน้าต่างเป้าหมายหลุดระหว่างกดค้าง: ปล่อยปุ่มก่อน หยุดชั่วคราว แล้วกดใหม่ทั้งครั้ง (เหมือนเมาส์กดค้าง)
+  - `SendInput` ส่งไม่สำเร็จ (มักเพราะเกมรันแบบ admin) = raise → Runner หยุดด้วย `error: ...` ไม่ใช่กดไม่ติดเงียบๆ
+  - `send_key` inject เข้า Runner ได้ (`key_sender=`) เทสต์ต้อง inject เสมอ ห้ามกดปุ่มจริง
+- **กันปุ่มลัดทำงานเอง** (เช่น step กด F6 = หยุดตัวเอง) 2 ชั้น:
+  1. ห้ามตั้งปุ่มของ step ให้ตรงกับปุ่มลัด (เทียบ mods ตรงตัวแบบ matcher: Shift+F6 ≠ F6) เช็กตอนจับปุ่มและตอนกดตกลงใน dialog และ **ตอนกดเริ่ม** (`find_key_conflict`) เพราะโปรไฟล์อาจเซฟไว้ตอนปุ่มลัดเป็นค่าอื่น
+  2. listener ข้าม event ที่ `injected = True` (pynput ≥ 1.8 ส่ง flag นี้มา, รุ่นเก่าไม่มี flag จึงมีแค่ชั้นที่ 1)
+- ค่าเริ่มต้นจุดใหม่ (`defaults.type`) ยังเป็นได้แค่ประเภทคลิก เพราะปุ่มลัดเพิ่มจุดใช้ตำแหน่งเมาส์
+- ไฟล์โปรไฟล์เก่าโหลดได้เหมือนเดิม step คลิกไม่มี `key_vk` / `key_mods` (โปรแกรมเวอร์ชันก่อนหน้าจะเปิดไฟล์ที่มี step กดปุ่มไม่ได้ เพราะไม่รู้จัก `type == "key"`)
+
+ตัวอย่าง step ใน JSON:
+
+```json
+{"x": null, "y": null, "type": "key", "key_vk": 69, "key_mods": [], "delay_ms": 500, "hold_ms": 50, "repeat": 1, "gap_ms": 100}
+```
+
+เทสต์มือ: กด E ใน Roblox ที่ ProximityPrompt จริง, ตั้ง Ctrl+A ใน Notepad (ต้องเลือกข้อความทั้งหมด), กดค้าง 2000ms แล้วกด F6 กลางคัน (Ctrl/Shift ต้องไม่ค้าง ลองพิมพ์ต่อดู), ลองตั้งปุ่มเป็น F6 (ต้องขึ้น error)
 
 ## 6. ข้อกำหนดด้านเทคนิค (ห้ามพลาด)
 

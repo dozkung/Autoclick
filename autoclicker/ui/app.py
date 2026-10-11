@@ -14,6 +14,7 @@ from ..constants import (
     CLICK_LABEL,
     CLICK_TYPES,
     DEFAULT_SETTINGS,
+    DEFAULT_STEP_KEY,
     FILE_VERSION,
     LABEL_TO_TYPE,
     MAX_COUNTDOWN_S,
@@ -33,7 +34,18 @@ from ..hotkeys import (
     validate_hotkeys,
 )
 from ..markers import Marker, smooth_markers_available
-from ..model import make_step, parse_profile, pick_unit, step_row, to_ms, try_move_step, validate_step
+from ..model import (
+    find_key_conflict,
+    is_key_step,
+    make_key_step,
+    make_step,
+    parse_profile,
+    pick_unit,
+    step_row,
+    to_ms,
+    try_move_step,
+    validate_step,
+)
 from ..runner import Runner, format_status
 from ..screen import get_virtual_origin, get_virtual_rect, in_corner, out_of_screen, window_dpi_scale
 from .dialogs import HotkeyDialog, StepDialog
@@ -54,6 +66,7 @@ class App:
         self.kb = None
         self.matcher = None
         self.hotkey_dialog = None
+        self.key_capture = None  # StepDialog ที่รอจับปุ่มสำหรับ step กดปุ่ม (รับคีย์ผ่าน listener เดียวกัน)
 
         self.marker_scale = self._marker_dpi_scale()
         self.smooth_markers = False  # ตั้งจริงใน _init_marker_mode หลังมี status bar
@@ -105,13 +118,14 @@ class App:
         side.pack(side="left", fill="y")
         for text, cmd in [
             ("เพิ่มเอง", self.add_manual),
+            ("เพิ่มปุ่มคีย์บอร์ด…", self.add_key_step),
             ("แก้ไข", self.edit_step),
             ("▲ ขึ้น", lambda: self.move(-1)),
             ("▼ ลง", lambda: self.move(1)),
             ("ลบ", self.delete_step),
             ("ล้างทั้งหมด", self.clear_steps),
         ]:
-            ttk.Button(side, text=text, command=cmd, width=12).pack(pady=2)
+            ttk.Button(side, text=text, command=cmd, width=16).pack(pady=2)
 
         # ---- settings
         st = ttk.LabelFrame(r, text="ตั้งค่า", padding=10)
@@ -255,8 +269,13 @@ class App:
         # จุดเดียวที่สร้างหมุด: ทิ้งของเก่าให้หมดก่อน ไม่งั้นหน้าต่าง Toplevel จะรั่ว
         for m in self.markers:
             m.destroy()
-        self.markers = [Marker(self, i, s) for i, s in enumerate(self.steps)]
+        # step กดปุ่มไม่มีพิกัด จึงไม่มีหมุด (Marker.index ยังเป็น index ใน steps เลขบนหมุดตรงกับตาราง)
+        self.markers = [Marker(self, i, s) for i, s in enumerate(self.steps) if not is_key_step(s)]
         self._apply_markers()
+
+    def _marker(self, i):
+        """หมุดของ step ที่ index i (None ถ้า step นั้นไม่มีหมุด) markers ไม่ได้เรียงตรง index เสมอไป"""
+        return next((m for m in self.markers if m.index == i), None)
 
     def _apply_markers(self):
         visible = self.show_markers.get() and not self.markers_suspended
@@ -288,15 +307,17 @@ class App:
         self.edit_step(i)
 
     def on_marker_drop(self, i, x, y):
+        marker = self._marker(i)
         if not self.can_drag_markers():
-            self.markers[i].snap_back()
+            if marker:
+                marker.snap_back()
             self.status.set("หยุดก่อนค่อยลากหมุด")
             return
         ok, reason = try_move_step(self.steps, i, x, y, get_virtual_origin(), get_virtual_rect())
         if ok:
             self.refresh(select=i)
-        else:
-            self.markers[i].snap_back()
+        elif marker:
+            marker.snap_back()
         self.status.set(reason)
 
     def _sel(self):
@@ -345,7 +366,19 @@ class App:
             init = self._new_step(100, 100)
         except ValueError:
             init = make_step(100, 100, LABEL_TO_TYPE[self.def_type.get()])  # ช่องรอผิด ใช้ค่าตั้งต้นไปก่อน
-        d = StepDialog(self.root, init, "เพิ่มจุด")
+        d = StepDialog(self.root, init, "เพิ่มจุด", app=self)
+        self.root.wait_window(d)
+        if d.result:
+            self.steps.append(d.result)
+            self.refresh(select=len(self.steps) - 1)
+
+    def add_key_step(self):
+        try:
+            delay = self._default_delay_ms()
+        except ValueError:
+            delay = 500  # ช่องรอผิด ใช้ค่าตั้งต้นไปก่อน แก้ใน dialog ได้
+        init = make_key_step(DEFAULT_STEP_KEY, delay_ms=delay, repeat=self._safe_int(self.def_repeat, 1))
+        d = StepDialog(self.root, init, "เพิ่มปุ่มคีย์บอร์ด", app=self)
         self.root.wait_window(d)
         if d.result:
             self.steps.append(d.result)
@@ -356,7 +389,7 @@ class App:
             i = self._sel()
         if i is None or not 0 <= i < len(self.steps):
             return
-        d = StepDialog(self.root, self.steps[i], f"แก้ไขจุด #{i + 1}")
+        d = StepDialog(self.root, self.steps[i], f"แก้ไขจุด #{i + 1}", app=self)
         self.root.wait_window(d)
         if d.result:
             self.steps[i] = d.result
@@ -413,12 +446,19 @@ class App:
         origin = get_virtual_origin()  # อ่านใหม่ทุกครั้ง เผื่อเสียบ/ถอดจอระหว่างใช้งาน
         rect = get_virtual_rect()
         for n, s in enumerate(self.steps, 1):
+            if is_key_step(s):  # กดปุ่มไม่มีพิกัด ไม่ต้องเช็กจอ/มุม
+                continue
             if out_of_screen(s["x"], s["y"], rect):
                 self.status.set(f"จุด #{n} อยู่นอกจอ (ถอดจอออก?)")
                 return
             if in_corner(s["x"], s["y"], origin):
                 self.status.set(f"จุด #{n} อยู่ในมุม kill switch แก้ก่อนค่อยเริ่ม")
                 return
+        # step กดปุ่มห้ามตรงกับปุ่มลัด ไม่งั้นโปรแกรมกดปุ่มหยุดตัวเอง (โปรไฟล์อาจเซฟไว้ตอนปุ่มลัดเป็นค่าอื่น)
+        conflict = find_key_conflict(self.steps, self.hotkeys)
+        if conflict:
+            self.status.set(conflict)
+            return
         self._suspend_markers(True)  # ต้องซ่อนก่อน start ไม่งั้น clicker คลิกโดนหมุดแทนแอปเป้าหมาย
         self.runner = Runner(
             self.steps,
@@ -482,9 +522,24 @@ class App:
             self.hotkey_dialog = None
             self.matcher.paused = False  # ถ้ากดบันทึก matcher นี้คือตัวใหม่ (ไม่ได้ pause อยู่แล้ว)
 
+    def begin_key_capture(self, sink):
+        """ให้ sink (StepDialog) รับปุ่มถัดไปที่กด ผ่าน pynput listener ตัวเดียวกับปุ่มลัด
+        (vk ชุดเดียวกับที่ matcher ใช้) ระหว่างรอ ปุ่มลัดทุกตัวปิดชั่วคราว"""
+        self.key_capture = sink
+        self.matcher.paused = True
+
+    def end_key_capture(self):
+        self.key_capture = None
+        if self.hotkey_dialog is None:  # HotkeyDialog เปิดอยู่ก็ต้องปิดปุ่มลัดต่อ
+            self.matcher.paused = False
+
     # ---------- cross-thread plumbing
-    def _on_press(self, key):
+    def _on_press(self, key, injected=False):
         # callback นี้รันใน thread ของ pynput ห้ามเรียก tkinter ตรงๆ (ถ้าเรียกจะ crash แบบสุ่ม)
+        if injected:
+            # ปุ่มที่โปรแกรมส่งเอง (step กดปุ่ม) ห้ามไปโดนปุ่มลัด pynput >= 1.8 ส่ง flag นี้มา
+            # pynput เก่าไม่ส่ง (= False ตลอด) ยังมีการเช็กปุ่มชนปุ่มลัดตอนตั้ง step / ตอนกดเริ่มกันไว้อีกชั้น
+            return
         m = self.matcher
         action = m.press(key_to_vk(key))
         if action == "add":
@@ -494,7 +549,9 @@ class App:
         elif m.paused and m.last_combo is not None:
             self.q.put(("captured", m.last_combo))  # ให้ HotkeyDialog ที่รอจับคีย์อยู่
 
-    def _on_release(self, key):
+    def _on_release(self, key, injected=False):
+        if injected:
+            return
         self.matcher.release(key_to_vk(key))
 
     def _poll(self):
@@ -513,8 +570,9 @@ class App:
                 elif kind == "markers":
                     self.toggle_markers()
                 elif kind == "captured":
-                    if self.hotkey_dialog is not None:
-                        self.hotkey_dialog.on_captured(msg[1])
+                    sink = self.hotkey_dialog or getattr(self, "key_capture", None)
+                    if sink is not None:
+                        sink.on_captured(msg[1])
                 elif kind in ("status", "notice"):
                     last_status = msg  # คลิกถี่ๆ ไม่ต้องวาดทุกครั้ง เอาแค่ล่าสุดของรอบ poll นี้
                 elif kind == "done":

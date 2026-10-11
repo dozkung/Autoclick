@@ -8,9 +8,23 @@ MAX_JITTER_PX = 50
 MAX_JITTER_MS = 5000
 KILL_REASON = "หยุดฉุกเฉิน (เมาส์ชนมุมซ้ายบนสุดของจอ)"
 
-CLICK_TYPES = ["left", "right", "double", "hold"]
-CLICK_LABEL = {"left": "คลิกซ้าย", "right": "คลิกขวา", "double": "ดับเบิลคลิก", "hold": "กดค้าง"}
+CLICK_TYPES = ["left", "right", "double", "hold"]  # step ที่ใช้เมาส์ (มีพิกัด มีหมุด)
+KEY_TYPE = "key"  # step กดปุ่มคีย์บอร์ด: ไม่มีพิกัด ไม่มีหมุด
+STEP_TYPES = CLICK_TYPES + [KEY_TYPE]
+CLICK_LABEL = {
+    "left": "คลิกซ้าย",
+    "right": "คลิกขวา",
+    "double": "ดับเบิลคลิก",
+    "hold": "กดค้าง",
+    KEY_TYPE: "กดปุ่ม",
+}
 LABEL_TO_TYPE = {v: k for k, v in CLICK_LABEL.items()}
+DEFAULT_KEY_HOLD_MS = 50  # กดปุ่มค้างสั้นๆ: เกมที่อ่านทีละเฟรม (~16ms) ต้องเห็นปุ่มลงอย่างน้อย 1 เฟรม
+DEFAULT_STEP_KEY = 0x45  # E (ปุ่มโต้ตอบของ Roblox / ProximityPrompt)
+# ปุ่มที่ต้องส่ง KEYEVENTF_EXTENDEDKEY ไม่งั้น scan code ชนกับปุ่มบน numpad (ลูกศร -> Num 8/2/4/6)
+EXTENDED_VKS = frozenset(
+    {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2C, 0x2D, 0x2E, 0x6F, 0x90, 0xA3, 0xA5}
+)
 MODES = ("loop", "count", "time")
 DEFAULT_SETTINGS = {
     "mode": "loop",
@@ -49,6 +63,7 @@ HOTKEY_ACTIONS = ("toggle", "add", "markers")
 HOTKEY_LABEL = {"toggle": "เริ่ม / หยุด", "add": "เพิ่มจุดที่เมาส์", "markers": "แสดง / ซ่อนหมุด"}
 MOD_ORDER = ("ctrl", "alt", "shift")
 MOD_LABEL = {"ctrl": "Ctrl", "alt": "Alt", "shift": "Shift"}
+MOD_VK = {"ctrl": 0x11, "alt": 0x12, "shift": 0x10}  # VK_CONTROL / VK_MENU / VK_SHIFT ใช้ตอนกด step ปุ่ม
 VK_ESCAPE = 0x1B
 # modifier ซ้าย/ขวา/กลาง นับเป็นตัวเดียวกัน (pynput บน Windows ส่ง L/R มา: Key.shift = 0xA0)
 VK_TO_MOD = {

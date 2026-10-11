@@ -327,5 +327,81 @@ class StartSettingTests(unittest.TestCase):
         )
 
 
+class KeyStepModelTests(unittest.TestCase):
+    VK_E = 0x45
+
+    def test_valid_key_step(self):
+        s = model.validate_step(
+            {"x": None, "y": None, "type": "key", "key_vk": self.VK_E, "key_mods": ["shift", "ctrl"]}
+        )
+        self.assertEqual(s["key_mods"], ["ctrl", "shift"])  # เรียงตาม MOD_ORDER
+        self.assertEqual(s["hold_ms"], constants.DEFAULT_KEY_HOLD_MS)  # ไม่ใส่ hold = 50 ไม่ใช่ 500
+        self.assertIsNone(s["x"])
+
+    def test_key_step_without_coords_field_ok(self):
+        s = model.validate_step({"type": "key", "key_vk": self.VK_E})
+        self.assertEqual((s["x"], s["y"], s["key_mods"]), (None, None, []))
+
+    def test_key_step_with_coords_rejected(self):
+        with self.assertRaises(ValueError):
+            model.validate_step({"x": 1, "y": 2, "type": "key", "key_vk": self.VK_E})
+
+    def test_bad_keys_rejected(self):
+        for vk in (None, 0, 300, True, "E", 0xA0, 0x1B, 0x5B):  # ไม่มี / นอกช่วง / Shift เดี่ยว / Esc / Win
+            with self.subTest(vk=vk), self.assertRaises(ValueError):
+                model.validate_step({"type": "key", "key_vk": vk})
+        with self.assertRaises(ValueError):
+            model.validate_step({"type": "key", "key_vk": self.VK_E, "key_mods": ["win"]})
+
+    def test_key_step_skips_kill_switch_check(self):
+        s = model.validate_step({"type": "key", "key_vk": self.VK_E}, origin=(0, 0))
+        self.assertEqual(s["type"], "key")
+
+    def test_click_step_dict_unchanged(self):
+        # step คลิกต้องไม่มี field ของปุ่ม ไฟล์โปรไฟล์ที่ไม่มีปุ่มหน้าตาเหมือนเดิมทุกอย่าง
+        self.assertNotIn("key_vk", model.make_step(1, 2))
+        self.assertNotIn("key_vk", model.validate_step({"x": 10, "y": 10}))
+
+    def test_step_row_shows_key_name(self):
+        row = model.step_row(3, model.make_key_step(self.VK_E, ["ctrl"], 1000, 50))
+        self.assertEqual(row, (3, "Ctrl+E", "-", "กดปุ่ม", 1, "-", "50 ms", "1 วิ"))
+
+    def test_step_from_form_key(self):
+        form = {
+            "x": "None",
+            "y": "",
+            "type": constants.CLICK_LABEL["key"],
+            "repeat": "2",
+            "delay_ms": "1",
+            "delay_ms_unit": "วินาที",
+            "hold_ms": "50",
+            "hold_ms_unit": "ms",
+            "gap_ms": "100",
+            "gap_ms_unit": "ms",
+            "key_vk": self.VK_E,
+            "key_mods": ["alt"],
+        }
+        self.assertEqual(
+            model.step_from_form(form), model.make_key_step(self.VK_E, ["alt"], 1000, 50, 2, 100)
+        )
+
+    def test_cannot_move_key_step(self):
+        steps = [model.make_key_step(self.VK_E)]
+        ok, reason = model.try_move_step(steps, 0, 100, 100, (0, 0), None)
+        self.assertFalse(ok)
+        self.assertIsNone(steps[0]["x"])
+
+    def test_find_key_conflict(self):
+        keys = {a: dict(v) for a, v in constants.DEFAULT_HOTKEYS.items()}
+        steps = [model.make_step(1, 2), model.make_key_step(0x77)]  # F8 = เพิ่มจุด
+        self.assertIn("จุด #2", model.find_key_conflict(steps, keys))
+        self.assertIsNone(model.find_key_conflict([model.make_key_step(self.VK_E)], keys))
+
+    def test_default_type_cannot_be_key(self):
+        # ค่าเริ่มต้นจุดใหม่ (ปุ่มลัดเพิ่มจุดที่เมาส์) ต้องเป็นคลิกเสมอ
+        with self.assertRaises(ValueError):
+            model.parse_profile({"defaults": {"type": "key"}})
+
+
 if __name__ == "__main__":
     unittest.main()

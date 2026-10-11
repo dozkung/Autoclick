@@ -7,7 +7,7 @@ import support
 
 support.install_stubs()
 
-from autoclicker import constants
+from autoclicker import constants, model
 from autoclicker import hotkeys as hotkeys_mod
 from autoclicker.ui import app as app_mod
 from support import SET_ONLY, FakeMouse, FakeVar, FakeWidget
@@ -70,6 +70,7 @@ class FakeApp(app_mod.App):
         self.matcher = hotkeys_mod.HotkeyMatcher(self.hotkeys, read_mods=SET_ONLY)
         self.kb = None
         self.hotkey_dialog = None
+        self.key_capture = None
         self.settings_file = None
         self.hint_lbl, self.markers_chk = FakeWidget(), FakeWidget()
         self.running_row = None
@@ -87,7 +88,8 @@ class FakeApp(app_mod.App):
         self.log.append(("refresh", select))
         for m in self.markers:
             m.destroy()
-        self.markers = [FakeMarker(i, self.log) for i in range(len(self.steps))]
+        # เหมือน _rebuild_markers จริง: step กดปุ่มไม่มีหมุด
+        self.markers = [FakeMarker(i, self.log) for i, s in enumerate(self.steps) if not model.is_key_step(s)]
         self._apply_markers()
 
 

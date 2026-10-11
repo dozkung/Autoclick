@@ -6,7 +6,9 @@ from .constants import (
     CLICK_TYPES,
     DEFAULT_DEFAULTS,
     DEFAULT_GAP_MS,
+    DEFAULT_KEY_HOLD_MS,
     DEFAULT_SETTINGS,
+    KEY_TYPE,
     LABEL_TO_TYPE,
     MAX_COUNTDOWN_S,
     MAX_DURATION_MS,
@@ -17,13 +19,25 @@ from .constants import (
     MAX_REPEAT,
     MIN_DELAY_MS,
     MODES,
+    STEP_TYPES,
     TIME_UNITS,
 )
+from .hotkeys import hotkey_conflict, hotkey_to_text, parse_hotkey
 from .screen import in_corner, out_of_screen
 
 
-def make_step(x, y, ctype="left", delay_ms=500, hold_ms=500, repeat=1, gap_ms=DEFAULT_GAP_MS):
-    return {
+def make_step(
+    x,
+    y,
+    ctype="left",
+    delay_ms=500,
+    hold_ms=500,
+    repeat=1,
+    gap_ms=DEFAULT_GAP_MS,
+    key_vk=None,
+    key_mods=None,
+):
+    s = {
         "x": x,
         "y": y,
         "type": ctype,
@@ -32,6 +46,28 @@ def make_step(x, y, ctype="left", delay_ms=500, hold_ms=500, repeat=1, gap_ms=DE
         "repeat": repeat,
         "gap_ms": gap_ms,
     }
+    if ctype == KEY_TYPE:  # field ของปุ่มมีเฉพาะ step กดปุ่ม step คลิกหน้าตาในไฟล์เหมือนเดิม
+        s["key_vk"] = key_vk
+        s["key_mods"] = list(key_mods or [])
+    return s
+
+
+def make_key_step(vk, mods=(), delay_ms=500, hold_ms=DEFAULT_KEY_HOLD_MS, repeat=1, gap_ms=DEFAULT_GAP_MS):
+    """step กดปุ่มคีย์บอร์ด: ไม่มีพิกัด (x/y = None)"""
+    return make_step(None, None, KEY_TYPE, delay_ms, hold_ms, repeat, gap_ms, vk, list(mods))
+
+
+def is_key_step(s):
+    return s["type"] == KEY_TYPE
+
+
+def step_key(s):
+    """ปุ่มของ step กดปุ่มในรูปแบบเดียวกับปุ่มลัด {"mods": [...], "vk": int}"""
+    return {"mods": list(s["key_mods"]), "vk": s["key_vk"]}
+
+
+def key_text(s):
+    return hotkey_to_text(step_key(s))
 
 
 def _int_field(d, key, default=None):
@@ -48,12 +84,24 @@ def validate_step(d, origin=(0, 0)):
     origin=None = ข้ามการเช็กโซน kill switch (ใช้ตอนโหลดไฟล์ ให้โหลดขึ้นมาแก้ได้ ไปเช็กตอนกดเริ่มแทน)"""
     if not isinstance(d, dict):
         raise ValueError(f"ข้อมูลจุดต้องเป็น object: {d!r}")
-    x, y = _int_field(d, "x"), _int_field(d, "y")
     ctype = d.get("type", "left")
-    if ctype not in CLICK_TYPES:
+    if ctype not in STEP_TYPES:
         raise ValueError(f"ประเภทคลิกไม่รู้จัก: {ctype}")
+    key = None
+    if ctype == KEY_TYPE:
+        # กดปุ่มไม่มีพิกัด: ไม่มีหมุด ไม่เช็ก kill switch / นอกจอ
+        if d.get("x") is not None or d.get("y") is not None:
+            raise ValueError("step กดปุ่มต้องไม่มีพิกัด (x/y ต้องเป็น null)")
+        try:
+            # ใช้กติกาเดียวกับปุ่มลัด: ห้าม Ctrl/Alt/Shift เดี่ยว, Esc, ปุ่ม Windows
+            key = parse_hotkey({"vk": d.get("key_vk"), "mods": d.get("key_mods", [])})
+        except ValueError as e:
+            raise ValueError(f"ปุ่มที่จะกด: {e}") from None
+        x = y = None
+    else:
+        x, y = _int_field(d, "x"), _int_field(d, "y")
     delay_ms = _int_field(d, "delay_ms", 500)
-    hold_ms = _int_field(d, "hold_ms", 500)
+    hold_ms = _int_field(d, "hold_ms", DEFAULT_KEY_HOLD_MS if key else 500)
     if delay_ms < MIN_DELAY_MS:
         raise ValueError(f"รอหลังกดต้องไม่น้อยกว่า {MIN_DELAY_MS} ms")
     if delay_ms > MAX_DURATION_MS:
@@ -69,6 +117,8 @@ def validate_step(d, origin=(0, 0)):
         raise ValueError(f"จำนวนครั้งต้องอยู่ระหว่าง 1–{MAX_REPEAT}")
     if not MIN_DELAY_MS <= gap_ms <= MAX_GAP_MS:
         raise ValueError(f"เว้นระหว่างครั้งต้องอยู่ระหว่าง {MIN_DELAY_MS}–{MAX_GAP_MS} ms")
+    if key is not None:
+        return make_step(None, None, KEY_TYPE, delay_ms, hold_ms, repeat, gap_ms, key["vk"], key["mods"])
     if origin is not None and in_corner(x, y, origin):
         raise ValueError(f"จุด ({x}, {y}) อยู่ในมุม kill switch")
     return make_step(x, y, ctype, delay_ms, hold_ms, repeat, gap_ms)
@@ -177,14 +227,15 @@ def format_duration(ms):
 
 def step_row(n, s):
     """ค่าของ 1 แถวในตาราง (n = เลขลำดับที่คำนวณจากตำแหน่ง) ช่องที่ไม่ใช้กับจุดนี้แสดง "-" """
+    key = is_key_step(s)
     return (
         n,
-        s["x"],
-        s["y"],
+        key_text(s) if key else s["x"],  # step กดปุ่มไม่มีพิกัด ใช้ช่อง X โชว์ชื่อปุ่มแทน
+        "-" if key else s["y"],
         CLICK_LABEL[s["type"]],
         s["repeat"],
         format_duration(s["gap_ms"]) if s["repeat"] > 1 else "-",
-        format_duration(s["hold_ms"]) if s["type"] == "hold" else "-",
+        format_duration(s["hold_ms"]) if s["type"] in ("hold", KEY_TYPE) else "-",
         format_duration(s["delay_ms"]),
     )
 
@@ -205,10 +256,20 @@ def step_from_form(form):
         except ValueError as e:
             raise ValueError(f"{label}: {e}") from None
 
+    ctype = LABEL_TO_TYPE[form["type"]]
+    if ctype == KEY_TYPE:  # ช่อง X/Y ถูกซ่อน ใช้ปุ่มที่จับไว้แทน
+        return make_key_step(
+            form["key_vk"],
+            form.get("key_mods", []),
+            as_ms("delay_ms", "รอหลังครั้งสุดท้าย"),
+            as_ms("hold_ms", "กดค้างนาน"),
+            as_int("repeat", "จำนวนครั้ง"),
+            as_ms("gap_ms", "เว้นระหว่างครั้ง"),
+        )
     return make_step(
         as_int("x", "X"),
         as_int("y", "Y"),
-        LABEL_TO_TYPE[form["type"]],
+        ctype,
         as_ms("delay_ms", "รอหลังครั้งสุดท้าย"),
         as_ms("hold_ms", "กดค้างนาน"),
         as_int("repeat", "จำนวนครั้ง"),
@@ -220,6 +281,8 @@ def try_move_step(steps, index, x, y, origin, rect):
     """ย้ายจุดที่ index ไป (x, y) คืน (ok, reason) ถ้าไม่ผ่านจะไม่แตะ steps"""
     if not 0 <= index < len(steps):
         return False, f"ไม่มีจุด #{index + 1}"
+    if is_key_step(steps[index]):
+        return False, f"จุด #{index + 1} เป็นการกดปุ่ม ไม่มีพิกัดให้ย้าย"
     if out_of_screen(x, y, rect):
         return False, f"ย้ายจุด #{index + 1} ไม่ได้: ({x}, {y}) อยู่นอกจอ"
     try:
@@ -228,3 +291,14 @@ def try_move_step(steps, index, x, y, origin, rect):
         return False, f"ย้ายจุด #{index + 1} ไม่ได้: {e}"
     steps[index] = moved
     return True, f"ย้ายจุด #{index + 1} ไป ({x}, {y})"
+
+
+def find_key_conflict(steps, hotkeys):
+    """หา step กดปุ่มตัวแรกที่ชนปุ่มลัด คืนข้อความ error หรือ None
+    เช็กตอนกดเริ่ม (ไฟล์โปรไฟล์อาจตั้งไว้ตอนปุ่มลัดยังเป็นอีกค่า) และตอนกดตกลงใน dialog"""
+    for n, s in enumerate(steps, 1):
+        if is_key_step(s):
+            label = hotkey_conflict(step_key(s), hotkeys)
+            if label:
+                return f"จุด #{n} กดปุ่ม {key_text(s)} ซึ่งเป็นปุ่มลัด '{label}' แก้ก่อนค่อยเริ่ม"
+    return None

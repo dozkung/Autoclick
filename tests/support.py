@@ -156,6 +156,31 @@ def step(x, y, ctype="left", delay_ms=10, hold_ms=0, repeat=1, gap_ms=constants.
     return model.make_step(x, y, ctype, delay_ms, hold_ms, repeat, gap_ms)
 
 
+def key_step(vk, *mods, delay_ms=10, hold_ms=0, repeat=1, gap_ms=constants.DEFAULT_GAP_MS):
+    return model.make_key_step(vk, list(mods), delay_ms, hold_ms, repeat, gap_ms)
+
+
+class FakeKeys:
+    """แทน send_key ของ Runner บันทึก (vk, down) ทุกครั้ง ห้ามกดปุ่มจริงตอนเทสต์
+    fail_on=(vk, down): ส่งปุ่มนั้นแล้ว raise (จำลอง SendInput พัง)"""
+
+    def __init__(self, fail_on=None):
+        self.log = []
+        self.down = set()
+        self.fail_on = fail_on
+        self._lock = threading.Lock()
+
+    def send(self, vk, down):
+        with self._lock:
+            if self.fail_on == (vk, down):
+                raise OSError("SendInput พัง")
+            self.log.append((vk, down))
+            if down:
+                self.down.add(vk)
+            else:
+                self.down.discard(vk)
+
+
 class FakeVar:
     def __init__(self, v=None):
         self.v = v

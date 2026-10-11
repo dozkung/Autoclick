@@ -1,4 +1,4 @@
-"""เธรดที่คลิกจริง (Runner) และการขยับเมาส์ให้เกมรับรู้ (nudge_mouse)
+"""เธรดที่คลิกจริง (Runner), การขยับเมาส์ให้เกมรับรู้ (nudge_mouse) และการกดปุ่มคีย์บอร์ด (send_key)
 ห้าม import tkinter: Runner คุยกับ UI ผ่าน callback ที่ใส่ queue เท่านั้น
 import pynput ได้ แต่ main.py ต้องตั้ง DPI awareness ก่อน import module นี้"""
 
@@ -13,9 +13,13 @@ from pynput.mouse import Button
 
 from .constants import (
     CORNER,
+    EXTENDED_VKS,
     FG_CHECK_S,
+    KEY_TYPE,
     KILL_REASON,
     MIN_DELAY_MS,
+    MOD_ORDER,
+    MOD_VK,
     OWN_WINDOW_REASON,
     PAUSED_TEXT,
     RESUME_DELAY_S,
@@ -24,7 +28,16 @@ from .constants import (
 from .screen import foreground_window, in_corner
 from .screen import is_window as win_is_window
 from .screen import window_pid as win_window_pid
-from .win32 import _INPUT, _INPUT_MOUSE, _MOUSEEVENTF_MOVE
+from .win32 import (
+    _INPUT,
+    _INPUT_KEYBOARD,
+    _INPUT_MOUSE,
+    _KEYEVENTF_EXTENDEDKEY,
+    _KEYEVENTF_KEYUP,
+    _KEYEVENTF_SCANCODE,
+    _MAPVK_VK_TO_VSC,
+    _MOUSEEVENTF_MOVE,
+)
 
 
 def nudge_mouse():
@@ -43,6 +56,35 @@ def nudge_mouse():
         ctypes.windll.user32.SendInput(2, inputs, ctypes.sizeof(_INPUT))
     except Exception:
         pass
+
+
+def key_input_fields(vk, down, scan):
+    """ค่า (wVk, wScan, dwFlags) ของ KEYBDINPUT 1 ตัว แยกออกมาให้เทสต์ได้โดยไม่แตะ Win32
+    มี scan code: ส่งแบบ KEYEVENTF_SCANCODE เพราะเกมอย่าง Roblox อ่านปุ่มจาก scan code
+    ถ้าส่งแค่ vk (แบบ pynput keyboard.Controller) เกมจะไม่รับ
+    ไม่มี scan code (MapVirtualKey คืน 0 เช่นปุ่มพิเศษบางตัว): ส่ง vk ตามปกติ ดีกว่าไม่ส่งเลย
+    ลูกศร/Insert/Delete/Home/End/PageUp/PageDown ต้องมี EXTENDEDKEY ไม่งั้นกลายเป็นปุ่มบน numpad"""
+    flags = 0 if down else _KEYEVENTF_KEYUP
+    if vk in EXTENDED_VKS:
+        flags |= _KEYEVENTF_EXTENDEDKEY
+    if scan:
+        return 0, scan, flags | _KEYEVENTF_SCANCODE
+    return vk, 0, flags
+
+
+def send_key(vk, down):
+    """กด (down=True) หรือปล่อยปุ่ม vk 1 ตัวด้วย SendInput แบบ scan code
+    ไม่ใช่ Windows หรือส่งไม่สำเร็จ = raise (Runner จะหยุดแล้วโชว์ error ไม่ใช่กดไม่ติดเงียบๆ)"""
+    if sys.platform != "win32":
+        raise RuntimeError("กดปุ่มคีย์บอร์ดได้เฉพาะบน Windows")
+    u = ctypes.windll.user32
+    wvk, wscan, flags = key_input_fields(vk, down, u.MapVirtualKeyW(vk, _MAPVK_VK_TO_VSC))
+    inp = _INPUT()
+    inp.type = _INPUT_KEYBOARD
+    inp.ki.wVk, inp.ki.wScan, inp.ki.dwFlags = wvk, wscan, flags
+    if u.SendInput(1, ctypes.byref(inp), ctypes.sizeof(_INPUT)) != 1:
+        # มักเกิดเมื่อหน้าต่างเป้าหมายรันแบบ admin (UIPI กัน input จากโปรแกรมสิทธิ์ต่ำกว่า)
+        raise OSError("ส่งปุ่มคีย์บอร์ดไม่สำเร็จ (เกมรันแบบ Administrator อยู่หรือเปล่า?)")
 
 
 def format_status(rnd, i, k, n):
@@ -75,12 +117,14 @@ class Runner(threading.Thread):
         foreground=None,
         is_window=None,
         window_pid=None,
+        key_sender=None,
     ):
         super().__init__(daemon=True)
         self.steps = [dict(s) for s in steps]  # snapshot: ระหว่างรันแก้ตารางได้ ไม่ชนกับเธรดนี้
         self.cfg = cfg
         self.origin = origin  # มุมซ้ายบนของ virtual screen ตอนกดเริ่ม
         self.nudge = nudge or nudge_mouse  # inject ได้ เทสต์จะได้ไม่ไปขยับเมาส์จริง
+        self.send_key = key_sender or send_key  # inject ได้ เทสต์จะได้ไม่ไปกดปุ่มจริง
         self.mouse = mouse_ctl
         self.on_status = on_status
         self.on_done = on_done
@@ -95,6 +139,7 @@ class Runner(threading.Thread):
         self.reason = "หยุดแล้ว"
         self.deadline = None
         self._held = None
+        self._held_keys = []  # ปุ่มคีย์บอร์ดที่กดค้างอยู่ (ตามลำดับที่กด) ต้องปล่อยให้หมดเสมอ
 
     def stop(self, reason="หยุดแล้ว"):
         if not self.stop_evt.is_set():
@@ -201,7 +246,10 @@ class Runner(threading.Thread):
     def _click_once(self, s):
         """คลิก 1 ครั้งตาม type (สุ่มพิกัดใหม่ทุกครั้ง) คืน False ถ้าโดนหยุดระหว่างรอ hover หรือกดค้าง
         คืน None ถ้าหน้าต่างเป้าหมายหลุดระหว่างกดค้าง (ต้องกดใหม่)
-        ลำดับ: วาร์ปเมาส์ -> ส่ง move event จริง -> รอ hover -> (ตั้งตำแหน่งซ้ำถ้าเพี้ยน) -> คลิก"""
+        ลำดับ: วาร์ปเมาส์ -> ส่ง move event จริง -> รอ hover -> (ตั้งตำแหน่งซ้ำถ้าเพี้ยน) -> คลิก
+        step กดปุ่มไม่ยุ่งกับเมาส์เลย ส่งต่อให้ _key_once"""
+        if s["type"] == KEY_TYPE:
+            return self._key_once(s)
         while True:
             jp = self.cfg["jitter_px"]
             x = s["x"] + (random.randint(-jp, jp) if jp else 0)
@@ -247,6 +295,31 @@ class Runner(threading.Thread):
                 self._held = None
         return True
 
+    def _key_once(self, s):
+        """กดปุ่ม 1 ครั้ง: กด mods -> กดปุ่ม -> ค้าง hold_ms -> ปล่อยปุ่ม -> ปล่อย mods (ย้อนลำดับ)
+        คืน False ถ้าโดนหยุด, None ถ้าหน้าต่างเป้าหมายหลุดระหว่างกดค้าง (ปล่อยแล้ว _click จะรอแล้วกดใหม่)"""
+        if not self._wait(0):  # เช็กหน้าต่างเป้าหมายก่อนกด ถ้าหลุดอยู่จะหยุดชั่วคราวในนี้
+            return False
+        vks = [MOD_VK[m] for m in MOD_ORDER if m in s["key_mods"]] + [s["key_vk"]]
+        try:
+            for vk in vks:
+                self.send_key(vk, True)
+                self._held_keys.append(vk)
+            # pausable=False: หน้าต่างหลุดระหว่างกดค้าง ห้ามค้างปุ่มไว้ระหว่างหยุดชั่วคราว
+            return self._wait(s["hold_ms"] / 1000, pausable=False)
+        finally:
+            self._release_keys()
+
+    def _release_keys(self):
+        """ปล่อยปุ่มที่กดค้างทั้งหมด ย้อนลำดับ (ปุ่มหลักก่อน แล้วค่อย mods)
+        ปล่อยตัวไหนพังก็ต้องปล่อยตัวที่เหลือต่อ ไม่งั้น Ctrl/Shift ค้างทั้งเครื่อง"""
+        while self._held_keys:
+            vk = self._held_keys.pop()
+            try:
+                self.send_key(vk, False)
+            except Exception:
+                pass
+
     def _run_step(self, rnd, i, s):
         """คลิกจุดเดียวซ้ำ repeat ครั้ง เว้น gap_ms ระหว่างครั้ง แล้วรอ delay_ms หลังครั้งสุดท้าย
         คืน False ถ้าโดนหยุด (stop / kill switch / deadline) กลางทาง"""
@@ -291,4 +364,5 @@ class Runner(threading.Thread):
                     self.mouse.release(self._held)
                 except Exception:
                     pass
+            self._release_keys()
             self.on_done(self.reason)

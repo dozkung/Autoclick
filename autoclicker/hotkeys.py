@@ -126,6 +126,16 @@ def assign_hotkey(hotkeys, action, hk):
     return dict(hotkeys, **{action: hk})
 
 
+def hotkey_conflict(key, hotkeys):
+    """ปุ่ม key ({"mods", "vk"}) ตรงกับปุ่มลัดตัวไหน คืนชื่อหน้าที่ (เช่น "เริ่ม / หยุด") หรือ None
+    ใช้กัน step กดปุ่มไปกดปุ่มลัดของโปรแกรมเอง (เช่นกด F6 = หยุดตัวเอง) เทียบ mods ตรงตัวแบบ matcher"""
+    kid = _hotkey_id(key)
+    for action in HOTKEY_ACTIONS:
+        if action in hotkeys and _hotkey_id(hotkeys[action]) == kid:
+            return HOTKEY_LABEL[action]
+    return None
+
+
 def key_to_vk(key):
     """pynput key -> vk: KeyCode มี .vk ตรงๆ ส่วน Key.xxx ต้องอ่านจาก .value.vk"""
     vk = getattr(key, "vk", None)
