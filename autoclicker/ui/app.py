@@ -16,6 +16,7 @@ from ..constants import (
     DEFAULT_SETTINGS,
     FILE_VERSION,
     LABEL_TO_TYPE,
+    MAX_COUNTDOWN_S,
     MAX_HOVER_MS,
     MAX_JITTER_MS,
     MAX_JITTER_PX,
@@ -176,6 +177,17 @@ class App:
         ttk.Spinbox(jf, from_=0, to=MAX_HOVER_MS, increment=10, textvariable=self.hover, width=5).pack(
             side="left", padx=2
         )
+
+        ttk.Label(st, text="ตอนเริ่ม:").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        sf = ttk.Frame(st)
+        sf.grid(row=3, column=1, columnspan=4, sticky="w", pady=(8, 0))
+        self.countdown = tk.IntVar(value=DEFAULT_SETTINGS["countdown_s"])
+        ttk.Label(sf, text="นับถอยหลัง (วิ)").pack(side="left")
+        ttk.Spinbox(sf, from_=0, to=MAX_COUNTDOWN_S, textvariable=self.countdown, width=4).pack(
+            side="left", padx=(2, 12)
+        )
+        self.pause_switch = tk.BooleanVar(value=DEFAULT_SETTINGS["pause_on_switch"])
+        ttk.Checkbutton(sf, text="หยุดเมื่อสลับหน้าต่าง", variable=self.pause_switch).pack(side="left")
 
         self.topmost = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -385,6 +397,10 @@ class App:
             "jitter_px": min(MAX_JITTER_PX, max(0, self._safe_int(self.jit_px, 0))),
             "jitter_ms": min(MAX_JITTER_MS, max(0, self._safe_int(self.jit_ms, 0))),
             "hover_ms": min(MAX_HOVER_MS, max(0, self._safe_int(self.hover, DEFAULT_SETTINGS["hover_ms"]))),
+            "countdown_s": min(
+                MAX_COUNTDOWN_S, max(0, self._safe_int(self.countdown, DEFAULT_SETTINGS["countdown_s"]))
+            ),
+            "pause_on_switch": bool(self.pause_switch.get()),
         }
 
     def toggle(self):
@@ -410,6 +426,7 @@ class App:
             self.mouse,
             on_status=lambda rnd, i, k, n: self.q.put(("status", rnd, i, k, n)),
             on_done=lambda reason: self.q.put(("done", reason)),
+            on_notice=lambda text: self.q.put(("notice", text)),
             origin=origin,
         )
         self.runner.start()
@@ -498,7 +515,7 @@ class App:
                 elif kind == "captured":
                     if self.hotkey_dialog is not None:
                         self.hotkey_dialog.on_captured(msg[1])
-                elif kind == "status":
+                elif kind in ("status", "notice"):
                     last_status = msg  # คลิกถี่ๆ ไม่ต้องวาดทุกครั้ง เอาแค่ล่าสุดของรอบ poll นี้
                 elif kind == "done":
                     last_status = None
@@ -510,9 +527,12 @@ class App:
         except queue.Empty:
             pass
         if last_status and self.runner and self.runner.is_alive():
-            _, rnd, i, k, n = last_status
-            self.status.set(format_status(rnd, i, k, n))
-            self._mark_running(i - 1)
+            if last_status[0] == "notice":  # นับถอยหลัง / หยุดชั่วคราว: ข้อความล้วน ไม่ไฮไลต์แถว
+                self.status.set(last_status[1])
+            else:
+                _, rnd, i, k, n = last_status
+                self.status.set(format_status(rnd, i, k, n))
+                self._mark_running(i - 1)
         self.root.after(30, self._poll)
 
     def _mark_running(self, row):
@@ -581,6 +601,8 @@ class App:
         self.jit_px.set(cfg["jitter_px"])
         self.jit_ms.set(cfg["jitter_ms"])
         self.hover.set(cfg["hover_ms"])
+        self.countdown.set(cfg["countdown_s"])
+        self.pause_switch.set(cfg["pause_on_switch"])
         self.def_type.set(CLICK_LABEL[dflt["type"]])
         value, unit = pick_unit(dflt["delay_ms"])  # ไฟล์เก็บ ms เสมอ UI โชว์หน่วยที่อ่านง่ายสุด
         self.def_delay.set(value)

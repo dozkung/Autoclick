@@ -69,3 +69,41 @@ def window_dpi_scale(hwnd):
     except (OSError, AttributeError):
         return None
     return dpi / 96 if dpi else None
+
+
+_GA_ROOT = 2
+
+
+def foreground_window():
+    """HWND ระดับบนสุด (GetAncestor GA_ROOT) ของหน้าต่างที่อยู่ข้างหน้า
+    ไม่ใช่ Windows / เรียกไม่ได้ / ไม่มีหน้าต่างข้างหน้า คืน None (ฟีเจอร์หยุดเมื่อสลับหน้าต่างจะปิดเอง)"""
+    if sys.platform != "win32":
+        return None
+    try:
+        u = _win32_api().user32
+        hwnd = u.GetForegroundWindow()
+        if not hwnd:
+            return None
+        return u.GetAncestor(hwnd, _GA_ROOT) or hwnd
+    except (OSError, AttributeError):
+        return None
+
+
+def is_window(hwnd):
+    """หน้าต่างยังอยู่ไหม (IsWindow) ถ้าเช็กไม่ได้ถือว่ายังอยู่ กันหยุดถาวรผิดๆ"""
+    try:
+        return bool(_win32_api().user32.IsWindow(hwnd))
+    except (OSError, AttributeError):
+        return True
+
+
+def window_pid(hwnd):
+    """process id เจ้าของหน้าต่าง หรือ None ถ้าอ่านไม่ได้"""
+    try:
+        from ctypes import wintypes
+
+        pid = wintypes.DWORD()
+        _win32_api().user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value or None
+    except (OSError, AttributeError):
+        return None

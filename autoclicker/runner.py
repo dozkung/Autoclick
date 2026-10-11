@@ -3,6 +3,7 @@
 import pynput ได้ แต่ main.py ต้องตั้ง DPI awareness ก่อน import module นี้"""
 
 import ctypes
+import os
 import random
 import sys
 import threading
@@ -10,8 +11,19 @@ import time
 
 from pynput.mouse import Button
 
-from .constants import CORNER, KILL_REASON, MIN_DELAY_MS
-from .screen import in_corner
+from .constants import (
+    CORNER,
+    FG_CHECK_S,
+    KILL_REASON,
+    MIN_DELAY_MS,
+    OWN_WINDOW_REASON,
+    PAUSED_TEXT,
+    RESUME_DELAY_S,
+    TARGET_CLOSED_REASON,
+)
+from .screen import foreground_window, in_corner
+from .screen import is_window as win_is_window
+from .screen import window_pid as win_window_pid
 from .win32 import _INPUT, _INPUT_MOUSE, _MOUSEEVENTF_MOVE
 
 
@@ -39,10 +51,31 @@ def format_status(rnd, i, k, n):
     return f"{text} ({k}/{n})" if n > 1 else text
 
 
-class Runner(threading.Thread):
-    """เธรดที่สั่งคลิกจริง ห้ามแตะ tkinter ในนี้ ให้ส่งข้อความผ่าน callback (ซึ่งใช้ queue) แทน"""
+def countdown_text(left):
+    """ข้อความ status ระหว่างนับถอยหลังก่อนเริ่ม"""
+    return f"เริ่มใน {left}…"
 
-    def __init__(self, steps, cfg, mouse_ctl, on_status, on_done, origin=(0, 0), nudge=None):
+
+class Runner(threading.Thread):
+    """เธรดที่สั่งคลิกจริง ห้ามแตะ tkinter ในนี้ ให้ส่งข้อความผ่าน callback (ซึ่งใช้ queue) แทน
+
+    foreground / is_window / window_pid inject ได้เหมือน nudge (เทสต์จะได้ไม่ไปอ่านหน้าต่างจริง)
+    ถ้า foreground คืน None (ไม่ใช่ Windows / เรียก API ไม่ได้) ฟีเจอร์หยุดเมื่อสลับหน้าต่างจะปิดเงียบๆ"""
+
+    def __init__(
+        self,
+        steps,
+        cfg,
+        mouse_ctl,
+        on_status,
+        on_done,
+        origin=(0, 0),
+        nudge=None,
+        on_notice=None,
+        foreground=None,
+        is_window=None,
+        window_pid=None,
+    ):
         super().__init__(daemon=True)
         self.steps = [dict(s) for s in steps]  # snapshot: ระหว่างรันแก้ตารางได้ ไม่ชนกับเธรดนี้
         self.cfg = cfg
@@ -51,6 +84,13 @@ class Runner(threading.Thread):
         self.mouse = mouse_ctl
         self.on_status = on_status
         self.on_done = on_done
+        self.on_notice = on_notice or (lambda text: None)  # ข้อความอิสระ (นับถอยหลัง / หยุดชั่วคราว)
+        self.foreground = foreground or foreground_window
+        self.is_window = is_window or win_is_window
+        self.window_pid = window_pid or win_window_pid
+        self.target = None  # หน้าต่างเกม: จำตอนนับถอยหลังจบ (None = ไม่เช็กหน้าต่าง)
+        self._pause_count = 0  # เพิ่มทุกครั้งที่หยุดชั่วคราว ใช้รู้ว่าต้องวาร์ปเมาส์/รอ hover ใหม่ไหม
+        self._last_status = None  # ไว้ส่งซ้ำตอนทำต่อหลังหยุดชั่วคราว status จะได้ไม่ค้างข้อความเดิม
         self.stop_evt = threading.Event()
         self.reason = "หยุดแล้ว"
         self.deadline = None
@@ -61,43 +101,129 @@ class Runner(threading.Thread):
             self.reason = reason
             self.stop_evt.set()
 
-    def _wait(self, sec):
+    def _check(self):
+        """เช็ก stop / kill switch / deadline คืน False ถ้าต้องหยุด"""
+        if self.stop_evt.is_set():
+            return False
+        x, y = self.mouse.position
+        if in_corner(x, y, self.origin):
+            self.stop(KILL_REASON)
+            return False
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            self.stop("ครบเวลาที่ตั้งไว้")
+            return False
+        return True
+
+    def _target_state(self):
+        """True = หน้าต่างเป้าหมายอยู่ข้างหน้า, None = ไม่อยู่ (ต้องหยุดชั่วคราว), False = ถูกปิด (หยุดถาวรแล้ว)"""
+        if not self.is_window(self.target):
+            self.stop(TARGET_CLOSED_REASON)
+            return False
+        return True if self.foreground() == self.target else None
+
+    def _wait(self, sec, pausable=True):
         """รอแบบแบ่งช่วงสั้นๆ ไม่ใช้ time.sleep(sec) ตรงๆ
-        เพราะถ้า delay ตั้งไว้ 30 วินาที กดหยุดแล้วต้องรอให้ครบก่อนถึงจะหยุดได้"""
+        เพราะถ้า delay ตั้งไว้ 30 วินาที กดหยุดแล้วต้องรอให้ครบก่อนถึงจะหยุดได้
+        ถ้ามีหน้าต่างเป้าหมาย เช็กทุก ≤FG_CHECK_S ว่ายังอยู่ข้างหน้าไหม ถ้าไม่อยู่จะหยุดชั่วคราวในนี้เลย
+        pausable=False (ระหว่างกดค้าง): ไม่หยุดชั่วคราวในนี้ แต่คืน None ให้คนเรียกปล่อยปุ่มก่อน"""
         end = time.monotonic() + max(0.0, sec)
+        next_fg = 0.0  # เช็กหน้าต่างทันทีรอบแรก = เช็กก่อนทุกคลิก
         while True:
-            if self.stop_evt.is_set():
-                return False
-            x, y = self.mouse.position
-            if in_corner(x, y, self.origin):
-                self.stop(KILL_REASON)
+            if not self._check():
                 return False
             now = time.monotonic()
-            if self.deadline is not None and now >= self.deadline:
-                self.stop("ครบเวลาที่ตั้งไว้")
-                return False
+            if self.target is not None and now >= next_fg:
+                next_fg = now + FG_CHECK_S
+                state = self._target_state()
+                if state is False:
+                    return False
+                if state is None:
+                    if not pausable:
+                        return None
+                    if not self._pause():
+                        return False
+                    continue
             left = end - now
             if left <= 0:
                 return True
             self.stop_evt.wait(min(left, 0.02))
 
+    def _pause(self):
+        """หยุดชั่วคราว (ไม่คลิก) จนหน้าต่างเป้าหมายกลับมาข้างหน้าครบ RESUME_DELAY_S
+        ระหว่างนี้ stop / kill switch ยังหยุดได้ และ deadline ของโหมดเวลายังเดินต่อ คืน False ถ้าโดนหยุด"""
+        self._pause_count += 1
+        self.on_notice(PAUSED_TEXT)
+        resume_at = None
+        while True:
+            if not self._check():
+                return False
+            state = self._target_state()
+            if state is False:
+                return False
+            now = time.monotonic()
+            if state is None:
+                resume_at = None  # หลุดอีกรอบระหว่างรอ 500ms ต้องเริ่มนับใหม่
+            elif resume_at is None:
+                resume_at = now + RESUME_DELAY_S
+            elif now >= resume_at:
+                break
+            self.stop_evt.wait(0.02)
+        if self._last_status is not None:
+            self.on_status(*self._last_status)
+        return True
+
+    def _countdown(self):
+        """นับถอยหลังผ่าน _wait (ยกเลิกด้วย F6 / ชนมุมได้) แล้วจำหน้าต่างเป้าหมาย คืน False ถ้าโดนหยุด"""
+        for left in range(self.cfg["countdown_s"], 0, -1):
+            self.on_notice(countdown_text(left))
+            if not self._wait(1.0):
+                return False
+        if self.cfg["pause_on_switch"]:
+            hwnd = self.foreground()
+            if hwnd:  # None = ไม่ใช่ Windows / อ่านไม่ได้ -> ปิดฟีเจอร์เงียบๆ คลิกได้ตามเดิม
+                if self.window_pid(hwnd) == os.getpid():
+                    # หน้าต่างข้างหน้าคือโปรแกรมเราเอง ถ้าคลิกต่อจะไปคลิกใส่ตัวเอง
+                    self.stop(OWN_WINDOW_REASON)
+                    return False
+                self.target = hwnd
+        return True
+
     def _click(self, s):
+        """คลิก 1 ครั้งตาม type คืน False ถ้าโดนหยุด
+        ถ้าหน้าต่างเป้าหมายหลุดระหว่างกดค้าง: ปุ่มถูกปล่อยแล้ว รอกลับมาแล้วกดใหม่ทั้งครั้ง (ทำต่อจาก step เดิม)"""
+        while True:
+            result = self._click_once(s)
+            if result is not None:
+                return result
+            if not self._pause():
+                return False
+
+    def _click_once(self, s):
         """คลิก 1 ครั้งตาม type (สุ่มพิกัดใหม่ทุกครั้ง) คืน False ถ้าโดนหยุดระหว่างรอ hover หรือกดค้าง
+        คืน None ถ้าหน้าต่างเป้าหมายหลุดระหว่างกดค้าง (ต้องกดใหม่)
         ลำดับ: วาร์ปเมาส์ -> ส่ง move event จริง -> รอ hover -> (ตั้งตำแหน่งซ้ำถ้าเพี้ยน) -> คลิก"""
-        jp = self.cfg["jitter_px"]
-        x = s["x"] + (random.randint(-jp, jp) if jp else 0)
-        y = s["y"] + (random.randint(-jp, jp) if jp else 0)
-        if in_corner(x, y, self.origin):  # จิตเตอร์ห้ามเหวี่ยงเมาส์เข้ามุม ไม่งั้นจะไปชน kill switch เอง
-            vx, vy = self.origin
-            x, y = max(x, vx + CORNER + 1), max(y, vy + CORNER + 1)
-        self.mouse.position = (x, y)
-        try:
-            self.nudge()  # SetCursorPos ไม่มี move event เกมบางตัว (Roblox) จะไม่อัปเดต hover
-        except Exception:
-            pass  # nudge พังแค่เสี่ยงคลิกไม่โดนในบางเกม ไม่ใช่เหตุให้หยุดทั้งงาน
-        # รอให้แอปเป้าหมายอัปเดต hover ก่อนคลิก (รอผ่าน _wait: หยุด/kill switch ได้ระหว่างรอ)
-        if not self._wait(self.cfg["hover_ms"] / 1000):
-            return False
+        while True:
+            jp = self.cfg["jitter_px"]
+            x = s["x"] + (random.randint(-jp, jp) if jp else 0)
+            y = s["y"] + (random.randint(-jp, jp) if jp else 0)
+            if in_corner(x, y, self.origin):  # จิตเตอร์ห้ามเหวี่ยงเมาส์เข้ามุม ไม่งั้นจะไปชน kill switch เอง
+                vx, vy = self.origin
+                x, y = max(x, vx + CORNER + 1), max(y, vy + CORNER + 1)
+            self.mouse.position = (x, y)
+            try:
+                self.nudge()  # SetCursorPos ไม่มี move event เกมบางตัว (Roblox) จะไม่อัปเดต hover
+            except Exception:
+                pass  # nudge พังแค่เสี่ยงคลิกไม่โดนในบางเกม ไม่ใช่เหตุให้หยุดทั้งงาน
+            paused_before = self._pause_count
+            # รอให้แอปเป้าหมายอัปเดต hover ก่อนคลิก (รอผ่าน _wait: หยุด/kill switch ได้ระหว่างรอ)
+            if not self._wait(self.cfg["hover_ms"] / 1000):
+                return False
+            # เช็กหน้าต่างเป้าหมายอีกรอบก่อนคลิกจริง (รอ hover นานได้ถึง 1 วิ)
+            if not self._wait(0):
+                return False
+            if self._pause_count == paused_before:
+                break
+            # หยุดชั่วคราวระหว่างรอ hover ผู้ใช้อาจขยับเมาส์ไปแล้ว ต้องวาร์ป/nudge/รอ hover ใหม่
         if tuple(self.mouse.position) != (x, y):
             # Enhance pointer precision อาจทำให้ +1/-1 ไม่หักล้างกันพอดี ตั้งตำแหน่งซ้ำให้เป๊ะก่อนคลิก
             # เช็กหลังรอ hover เพราะ SendInput เข้าคิวแบบ async อ่านทันทีอาจยังไม่เห็นผล
@@ -113,7 +239,8 @@ class Runner(threading.Thread):
             self.mouse.press(Button.left)
             self._held = Button.left
             try:
-                return self._wait(s["hold_ms"] / 1000)
+                # pausable=False: หน้าต่างหลุดระหว่างกดค้าง ห้ามค้างปุ่มไว้ระหว่างหยุดชั่วคราว
+                return self._wait(s["hold_ms"] / 1000, pausable=False)
             finally:
                 # ต้องปล่อยเสมอ ถึงจะโดนหยุดกลางคันก็ตาม ไม่งั้นปุ่มเมาส์ค้างทั้งเครื่อง
                 self.mouse.release(Button.left)
@@ -128,6 +255,7 @@ class Runner(threading.Thread):
         for k in range(1, n + 1):
             if not self._wait(0):
                 return False
+            self._last_status = (rnd, i, k, n)
             self.on_status(rnd, i, k, n)
             if not self._click(s):
                 return False
@@ -143,7 +271,9 @@ class Runner(threading.Thread):
         try:
             if not self.steps:  # ไม่มีจุดแล้วปล่อยวน loop จะเป็นลูปเปล่ากิน CPU 100%
                 raise ValueError("ไม่มีจุดให้คลิก")
-            if cfg["mode"] == "time":
+            if not self._countdown():
+                return
+            if cfg["mode"] == "time":  # เริ่มนับเวลาหลังนับถอยหลังจบ
                 self.deadline = time.monotonic() + cfg["minutes"] * 60
             while not self.stop_evt.is_set():
                 rnd += 1

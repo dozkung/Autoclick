@@ -8,6 +8,7 @@ from .constants import (
     DEFAULT_GAP_MS,
     DEFAULT_SETTINGS,
     LABEL_TO_TYPE,
+    MAX_COUNTDOWN_S,
     MAX_DURATION_MS,
     MAX_GAP_MS,
     MAX_HOVER_MS,
@@ -112,6 +113,12 @@ def parse_profile(data, origin=None):
     st["hover_ms"] = _int_field(raw, "hover_ms", st["hover_ms"])  # ไฟล์เก่าไม่มี -> 50
     if not 0 <= st["hover_ms"] <= MAX_HOVER_MS:
         raise ValueError(f"hover_ms ต้องอยู่ระหว่าง 0–{MAX_HOVER_MS}")
+    st["countdown_s"] = _int_field(raw, "countdown_s", st["countdown_s"])  # ไฟล์เก่าไม่มี -> 3
+    if not 0 <= st["countdown_s"] <= MAX_COUNTDOWN_S:
+        raise ValueError(f"countdown_s ต้องอยู่ระหว่าง 0–{MAX_COUNTDOWN_S}")
+    st["pause_on_switch"] = raw.get("pause_on_switch", st["pause_on_switch"])  # ไฟล์เก่าไม่มี -> True
+    if not isinstance(st["pause_on_switch"], bool):
+        raise ValueError(f"pause_on_switch ต้องเป็น true/false: {st['pause_on_switch']!r}")
 
     raw = data.get("defaults", {})
     if not isinstance(raw, dict):

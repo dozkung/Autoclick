@@ -19,7 +19,15 @@ DEFAULT_SETTINGS = {
     "jitter_px": 0,
     "jitter_ms": 0,
     "hover_ms": 50,
+    "countdown_s": 3,
+    "pause_on_switch": True,
 }
+MAX_COUNTDOWN_S = 30  # นับถอยหลังก่อนเริ่ม ให้เวลาสลับไปหน้าต่างเกม
+FG_CHECK_S = 0.1  # เช็กหน้าต่างข้างหน้าทุก ≤100ms ระหว่างรอ
+RESUME_DELAY_S = 0.5  # หน้าต่างเป้าหมายกลับมาข้างหน้าแล้ว รอให้เกมพร้อมรับคลิกก่อนทำต่อ
+PAUSED_TEXT = "หยุดชั่วคราว: หน้าต่างเกมไม่ได้อยู่ข้างหน้า"
+TARGET_CLOSED_REASON = "หน้าต่างเป้าหมายถูกปิด"
+OWN_WINDOW_REASON = "สลับไปหน้าต่างเกมก่อนนับถอยหลังจบ"
 MAX_HOVER_MS = 1000  # รอ hover หลังย้ายเมาส์ก่อนคลิก (เกมอัปเดต hover ทีละเฟรม ~16ms)
 DEFAULT_DEFAULTS = {"type": "left", "delay_ms": 500, "repeat": 1}
 MAX_DURATION_MS = 86_400_000  # 24 ชม. กันพิมพ์ผิดหน่วยแล้วโปรแกรมรอเป็นปี

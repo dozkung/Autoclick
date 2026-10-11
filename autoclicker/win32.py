@@ -122,5 +122,11 @@ def _win32_api():
             u.GetDpiForWindow.argtypes, u.GetDpiForWindow.restype = [wt.HWND], wt.UINT
         except AttributeError:  # Windows เก่ากว่า 10 1607
             pass
+        # หน้าต่างข้างหน้า (หยุดชั่วคราวเมื่อสลับหน้าต่าง) HWND ต้องเป็น pointer ไม่งั้นโดนตัดเหลือ 32-bit
+        u.GetForegroundWindow.argtypes, u.GetForegroundWindow.restype = [], wt.HWND
+        u.GetAncestor.argtypes, u.GetAncestor.restype = [wt.HWND, wt.UINT], wt.HWND
+        u.IsWindow.argtypes, u.IsWindow.restype = [wt.HWND], wt.BOOL
+        u.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+        u.GetWindowThreadProcessId.restype = wt.DWORD
         _win32 = types.SimpleNamespace(user32=u, gdi32=g)
     return _win32

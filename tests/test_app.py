@@ -516,5 +516,79 @@ class MarkerFallbackAppTests(unittest.TestCase):
         self.assertIsInstance(app.marker_fallback_reason, OSError)
 
 
+class StartSettingAppTests(unittest.TestCase):
+    """นับถอยหลัง / หยุดเมื่อสลับหน้าต่าง ฝั่ง UI"""
+
+    def test_cfg_clamps_and_passes_flag(self):
+        app = fake_app([])
+        for v, expect in [(99, 30), (-1, 0), ("x", 3), (5, 5)]:
+            app.countdown.set(v)
+            self.assertEqual(app._cfg()["countdown_s"], expect)
+        app.pause_switch.set(False)
+        self.assertIs(app._cfg()["pause_on_switch"], False)
+
+    def test_save_and_load_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "p.json")
+            app_mod.filedialog.asksaveasfilename = lambda **k: path
+            app_mod.filedialog.askopenfilename = lambda **k: path
+            app_mod.messagebox.errors.clear()
+            app = fake_app([step(100, 100)])
+            app.countdown.set(7)
+            app.pause_switch.set(False)
+            app_mod.App.save(app)
+            other = fake_app([])
+            app_mod.App.load(other)
+            self.assertEqual(app_mod.messagebox.errors, [])
+            self.assertEqual((other.countdown.get(), other.pause_switch.get()), (7, False))
+
+    def test_load_old_file_sets_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "p.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"steps": [{"x": 50, "y": 60}], "settings": {"mode": "loop"}}, f)
+            app_mod.filedialog.askopenfilename = lambda **k: path
+            app = fake_app([])
+            app.countdown.set(9)
+            app.pause_switch.set(False)
+            app_mod.App.load(app)
+            self.assertEqual((app.countdown.get(), app.pause_switch.get()), (3, True))
+
+    def test_notice_shown_in_status_without_row_highlight(self):
+        app = fake_app([step(100, 100)])
+        app.runner = types.SimpleNamespace(is_alive=lambda: True)
+        app.q.put(("status", 1, 1, 1, 1))
+        app.q.put(("notice", constants.PAUSED_TEXT))  # ข้อความล่าสุดของรอบ poll ชนะ
+        app._poll()
+        self.assertEqual(app.status.get(), constants.PAUSED_TEXT)
+        app.q.put(("notice", "เริ่มใน 2…"))
+        app._poll()
+        self.assertEqual(app.status.get(), "เริ่มใน 2…")
+
+    def test_toggle_passes_notice_and_hides_markers_first(self):
+        orig = app_mod.Runner, app_mod.get_virtual_rect, app_mod.get_virtual_origin
+        got = {}
+        app = fake_app([step(100, 100)])
+        app.refresh()
+
+        def fake_runner(*a, **k):
+            got.update(k, cfg=a[1], hidden=not any(m.visible for m in app.markers))
+            return types.SimpleNamespace(start=lambda: None)
+
+        app_mod.Runner, app_mod.get_virtual_rect, app_mod.get_virtual_origin = (
+            fake_runner,
+            lambda: None,
+            lambda: (0, 0),
+        )
+        try:
+            app.toggle()
+        finally:
+            app_mod.Runner, app_mod.get_virtual_rect, app_mod.get_virtual_origin = orig
+        self.assertTrue(got["hidden"])  # กดเริ่มแล้วซ่อนหมุดทันที ก่อนนับถอยหลัง
+        got["on_notice"]("เริ่มใน 3…")
+        self.assertEqual(app.q.get_nowait(), ("notice", "เริ่มใน 3…"))
+        self.assertEqual((got["cfg"]["countdown_s"], got["cfg"]["pause_on_switch"]), (3, True))
+
+
 if __name__ == "__main__":
     unittest.main()

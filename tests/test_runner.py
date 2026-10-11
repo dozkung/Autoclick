@@ -1,6 +1,7 @@
 """เทสต์ Runner ด้วย FakeMouse (stub แค่ pynput.mouse.Button ไม่ต้องมีจอ)"""
 
 import ctypes
+import os
 import sys
 import threading
 import time
@@ -16,16 +17,19 @@ from autoclicker import (
     win32,
 )
 from autoclicker import runner as runner_mod
-from support import FakeMouse, cfg, step
+from support import FakeMouse, FakeWindows, cfg, step
 
 
 class RunnerHarness:
-    def __init__(self, steps, config, mouse=None, origin=(0, 0), nudge=None):
+    def __init__(self, steps, config, mouse=None, origin=(0, 0), nudge=None, win=None):
         self.mouse = mouse or FakeMouse()
         self.done = threading.Event()
         self.reason = None
         self.statuses = []  # (รอบ, จุด, ครั้งที่, repeat)
-        # ต้อง inject nudge เสมอ ไม่งั้นรันเทสต์บน Windows จะไปขยับเมาส์จริงของเครื่อง
+        self.notices = []  # ข้อความนับถอยหลัง / หยุดชั่วคราว
+        # ต้อง inject nudge และ foreground เสมอ ไม่งั้นรันเทสต์บน Windows จะไปขยับเมาส์/อ่านหน้าต่างจริง
+        # win=None: ไม่มีหน้าต่างข้างหน้า (เหมือนไม่ใช่ Windows) ฟีเจอร์หยุดเมื่อสลับหน้าต่างจะปิด
+        win = win or FakeWindows(foreground=None)
         self.runner = runner_mod.Runner(
             steps,
             config,
@@ -34,6 +38,10 @@ class RunnerHarness:
             on_done=self._on_done,
             origin=origin,
             nudge=nudge or self.mouse.nudge,
+            on_notice=self.notices.append,
+            foreground=win.foreground_window,
+            is_window=win.is_window,
+            window_pid=win.window_pid,
         )
 
     def _on_done(self, reason):
@@ -344,6 +352,219 @@ class HoverNudgeTests(unittest.TestCase):
         # SendInput ต้องได้ cbSize ตรงกับ sizeof(INPUT) ของ Windows ไม่งั้นจะ fail เงียบๆ
         expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
         self.assertEqual(ctypes.sizeof(win32._INPUT), expected)
+
+
+class FormatStatusTests(unittest.TestCase):
+    """ย้ายมาจาก test_model: format_status อยู่ใน runner (import pynput) เทสต์ model จะได้ไม่ต้อง stub"""
+
+    def test_format_status(self):
+        self.assertEqual(runner_mod.format_status(4, 2, 1, 1), "รอบ 4 · จุด #2")
+        self.assertEqual(runner_mod.format_status(4, 2, 2, 3), "รอบ 4 · จุด #2 (2/3)")
+
+
+# ------------------------------------------------- countdown / pause on switch
+class CountdownTests(unittest.TestCase):
+    def test_countdown_text(self):
+        self.assertEqual(runner_mod.countdown_text(3), "เริ่มใน 3…")
+
+    def test_countdown_then_clicks(self):
+        t0 = time.monotonic()
+        h = RunnerHarness([step(100, 100)], cfg(mode="count", rounds=1, countdown_s=1)).start()
+        self.assertEqual(h.finish(), "ครบ 1 รอบ")
+        click_t = [ts for kind, _, ts in h.mouse.events if kind == "click"]
+        self.assertEqual(len(click_t), 1)
+        self.assertGreaterEqual(click_t[0] - t0, 0.95)  # คลิกหลังนับถอยหลังจบ
+        self.assertEqual(h.notices, ["เริ่มใน 1…"])
+
+    def test_notices_count_down(self):
+        h = RunnerHarness([step(100, 100)], cfg(countdown_s=3)).start()
+        self.assertTrue(h.wait_for(lambda: len(h.notices) >= 2, timeout=3))
+        h.runner.stop()
+        h.finish()
+        self.assertEqual(h.notices[:2], ["เริ่มใน 3…", "เริ่มใน 2…"])
+
+    def test_stop_during_countdown_no_clicks(self):
+        h = RunnerHarness([step(100, 100)], cfg(countdown_s=30)).start()
+        self.assertTrue(h.wait_for(lambda: h.notices))
+        t0 = time.monotonic()
+        h.runner.stop("หยุดโดยผู้ใช้")
+        h.runner.join(0.3)
+        self.assertFalse(h.runner.is_alive())
+        self.assertLess(time.monotonic() - t0, 0.3)
+        self.assertEqual(h.finish(), "หยุดโดยผู้ใช้")
+        self.assertEqual(h.mouse.log, [])
+
+    def test_kill_switch_during_countdown(self):
+        h = RunnerHarness([step(100, 100)], cfg(countdown_s=30)).start()
+        self.assertTrue(h.wait_for(lambda: h.notices))
+        h.mouse.position = (0, 0)
+        self.assertTrue(h.done.wait(0.3))
+        self.assertEqual(h.finish(), constants.KILL_REASON)
+        self.assertEqual(h.mouse.log, [])
+
+    def test_time_mode_deadline_starts_after_countdown(self):
+        t0 = time.monotonic()
+        h = RunnerHarness([step(100, 100)], cfg(mode="time", minutes=0.5 / 60, countdown_s=1)).start()
+        self.assertEqual(h.finish(), "ครบเวลาที่ตั้งไว้")
+        self.assertGreaterEqual(time.monotonic() - t0, 1.45)  # 1 วินับถอยหลัง + 0.5 วิทำงาน
+        self.assertTrue(h.mouse.clicks())
+
+
+def switching(win, mouse, at_x, back_after):
+    """nudge ปลอม: พอเมาส์ไปถึง x == at_x (ก่อนคลิก) สลับหน้าต่างเป้าหมายออก
+    แล้วสลับกลับหลัง back_after วิ (None = ไม่กลับ) คืน (nudge, [เวลาที่สลับกลับ])"""
+    back_at = []
+
+    def nudge():
+        mouse.nudge()
+        if mouse.position[0] == at_x and win.foreground == FakeWindows.GAME and not back_at:
+            win.foreground = FakeWindows.OTHER
+            back_at.append(None)
+            if back_after is not None:
+
+                def back():
+                    time.sleep(back_after)
+                    back_at[0] = time.monotonic()
+                    win.foreground = FakeWindows.GAME
+
+                threading.Thread(target=back, daemon=True).start()
+
+    return nudge, back_at
+
+
+class PauseOnSwitchTests(unittest.TestCase):
+    def cfg(self, **kw):
+        return cfg(pause_on_switch=True, **kw)
+
+    def test_target_is_foreground_when_countdown_ends(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100)], self.cfg(mode="count", rounds=1), win=win).start()
+        h.finish()
+        self.assertEqual(h.runner.target, FakeWindows.GAME)
+
+    def test_own_window_stops_immediately(self):
+        win = FakeWindows(pids={FakeWindows.GAME: os.getpid()})
+        h = RunnerHarness([step(100, 100)], self.cfg(), win=win).start()
+        self.assertEqual(h.finish(), constants.OWN_WINDOW_REASON)
+        self.assertEqual(h.mouse.log, [])
+
+    def test_feature_off_when_no_foreground_api(self):
+        h = RunnerHarness([step(100, 100)], self.cfg(mode="count", rounds=2)).start()  # foreground=None
+        self.assertEqual(h.finish(), "ครบ 2 รอบ")
+        self.assertIsNone(h.runner.target)
+        self.assertEqual(len(h.mouse.clicks()), 2)
+
+    def test_feature_off_when_unchecked(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100)], cfg(mode="count", rounds=1, pause_on_switch=False), win=win)
+        win.foreground = FakeWindows.OTHER
+        h.start()
+        self.assertEqual(h.finish(), "ครบ 1 รอบ")
+        self.assertIsNone(h.runner.target)
+
+    def test_switch_away_pauses_without_clicking(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100, delay_ms=20)], self.cfg(), win=win).start()
+        self.assertTrue(h.wait_for(lambda: len(h.mouse.clicks()) >= 2))
+        win.foreground = FakeWindows.OTHER
+        self.assertTrue(h.wait_for(lambda: constants.PAUSED_TEXT in h.notices))
+        time.sleep(0.15)  # เผื่อคลิกที่กำลังทำอยู่ให้จบ
+        n = len(h.mouse.clicks())
+        time.sleep(0.4)
+        self.assertEqual(len(h.mouse.clicks()), n)  # หยุดชั่วคราว = ไม่คลิกเลย
+        self.assertTrue(h.runner.is_alive())
+        h.runner.stop()
+        h.finish()
+
+    def test_resume_continues_from_same_step(self):
+        win, mouse = FakeWindows(), FakeMouse()
+        nudge, back_at = switching(win, mouse, at_x=200, back_after=0.3)
+        steps = [step(100, 100, delay_ms=10), step(200, 200, delay_ms=10), step(300, 300, delay_ms=10)]
+        h = RunnerHarness(steps, self.cfg(mode="count", rounds=1), mouse=mouse, nudge=nudge, win=win)
+        h.start()
+        self.assertEqual(h.finish(timeout=5), "ครบ 1 รอบ")
+        xs = [e[3][0] for e in mouse.clicks()]
+        self.assertEqual(xs, [100, 200, 300])  # จุด 2 ไม่ถูกข้าม และไม่คลิกซ้ำจุด 1
+        click2 = [ts for kind, pos, ts in mouse.events if kind == "click" and pos[0] == 200][0]
+        self.assertGreaterEqual(click2 - back_at[0], 0.45)  # กลับมาแล้วรอ 500ms ก่อนทำต่อ
+        self.assertIn(constants.PAUSED_TEXT, h.notices)
+        self.assertEqual(h.statuses.count((1, 2, 1, 1)), 2)  # ส่ง status จุดเดิมซ้ำตอนทำต่อ
+
+    def test_flapping_during_resume_restarts_delay(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100, delay_ms=20)], self.cfg(), win=win).start()
+        self.assertTrue(h.wait_for(lambda: h.mouse.clicks()))
+        win.foreground = FakeWindows.OTHER
+        self.assertTrue(h.wait_for(lambda: constants.PAUSED_TEXT in h.notices))
+        time.sleep(0.1)
+        n = len(h.mouse.clicks())
+        win.foreground = FakeWindows.GAME
+        time.sleep(0.3)
+        win.foreground = FakeWindows.OTHER  # หลุดอีกรอบก่อนครบ 500ms
+        time.sleep(0.4)
+        self.assertEqual(len(h.mouse.clicks()), n)
+        h.runner.stop()
+        h.finish()
+
+    def test_target_closed_stops(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100, delay_ms=20)], self.cfg(), win=win).start()
+        self.assertTrue(h.wait_for(lambda: h.mouse.clicks()))
+        win.closed.add(FakeWindows.GAME)
+        self.assertTrue(h.done.wait(0.5))
+        self.assertEqual(h.finish(), constants.TARGET_CLOSED_REASON)
+
+    def test_target_closed_while_paused_stops(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100, delay_ms=20)], self.cfg(), win=win).start()
+        self.assertTrue(h.wait_for(lambda: h.mouse.clicks()))
+        win.foreground = FakeWindows.OTHER
+        self.assertTrue(h.wait_for(lambda: constants.PAUSED_TEXT in h.notices))
+        win.closed.add(FakeWindows.GAME)
+        self.assertTrue(h.done.wait(0.3))
+        self.assertEqual(h.finish(), constants.TARGET_CLOSED_REASON)
+
+    def test_stop_and_kill_switch_work_while_paused(self):
+        for how in ("stop", "kill"):
+            with self.subTest(how=how):
+                win = FakeWindows()
+                h = RunnerHarness([step(100, 100, delay_ms=20)], self.cfg(), win=win).start()
+                self.assertTrue(h.wait_for(lambda: h.mouse.clicks()))
+                win.foreground = FakeWindows.OTHER
+                self.assertTrue(h.wait_for(lambda: constants.PAUSED_TEXT in h.notices))
+                if how == "stop":
+                    h.runner.stop("หยุดโดยผู้ใช้")
+                else:
+                    h.mouse.position = (0, 0)
+                self.assertTrue(h.done.wait(0.3))
+                expect = "หยุดโดยผู้ใช้" if how == "stop" else constants.KILL_REASON
+                self.assertEqual(h.finish(), expect)
+
+    def test_deadline_keeps_running_while_paused(self):
+        win, mouse = FakeWindows(), FakeMouse()
+        nudge, _ = switching(win, mouse, at_x=100, back_after=None)  # หลุดตั้งแต่คลิกแรก ไม่กลับมาอีก
+        t0 = time.monotonic()
+        h = RunnerHarness(
+            [step(100, 100)], self.cfg(mode="time", minutes=0.5 / 60), mouse=mouse, nudge=nudge, win=win
+        ).start()
+        self.assertEqual(h.finish(), "ครบเวลาที่ตั้งไว้")
+        self.assertLess(time.monotonic() - t0, 0.9)
+        self.assertEqual(mouse.clicks(), [])
+
+    def test_hold_released_when_switching_away_then_redone(self):
+        win = FakeWindows()
+        h = RunnerHarness([step(100, 100, "hold", hold_ms=30000)], self.cfg(), win=win).start()
+        self.assertTrue(h.wait_for(lambda: h.mouse.pressed))
+        win.foreground = FakeWindows.OTHER
+        self.assertTrue(h.wait_for(lambda: not h.mouse.pressed))  # ปล่อยปุ่มทันทีที่หน้าต่างหลุด
+        time.sleep(0.3)
+        self.assertEqual([e[0] for e in h.mouse.log], ["press", "release"])  # ไม่กดค้างระหว่างหยุด
+        win.foreground = FakeWindows.GAME
+        self.assertTrue(h.wait_for(lambda: h.mouse.pressed, timeout=2))  # กลับมาแล้วกดใหม่ทั้งครั้ง
+        h.runner.stop()
+        h.finish()
+        self.assertEqual([e[0] for e in h.mouse.log], ["press", "release", "press", "release"])
+        self.assertEqual(h.mouse.pressed, set())
 
 
 if __name__ == "__main__":

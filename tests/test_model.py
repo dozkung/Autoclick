@@ -7,7 +7,6 @@ from autoclicker import (
     constants,
     model,
 )
-from autoclicker import runner as runner_mod
 from support import step
 
 
@@ -153,10 +152,6 @@ class RepeatModelTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 model.parse_profile({"defaults": {"repeat": bad}})
         self.assertEqual(model.parse_profile({"defaults": {"repeat": 7}})[2]["repeat"], 7)
-
-    def test_format_status(self):
-        self.assertEqual(runner_mod.format_status(4, 2, 1, 1), "รอบ 4 · จุด #2")
-        self.assertEqual(runner_mod.format_status(4, 2, 2, 3), "รอบ 4 · จุด #2 (2/3)")
 
     def test_step_row(self):
         self.assertEqual(
@@ -305,6 +300,31 @@ class HoverSettingTests(unittest.TestCase):
                 model.parse_profile({"settings": {"hover_ms": bad}})
         for ok in (0, 1000):
             self.assertEqual(model.parse_profile({"settings": {"hover_ms": ok}})[1]["hover_ms"], ok)
+
+
+class StartSettingTests(unittest.TestCase):
+    """นับถอยหลัง / หยุดเมื่อสลับหน้าต่าง ใน settings ของโปรไฟล์"""
+
+    def test_old_profile_gets_defaults(self):
+        _, st, _ = model.parse_profile({"settings": {"mode": "loop", "hover_ms": 50}})
+        self.assertEqual((st["countdown_s"], st["pause_on_switch"]), (3, True))
+        _, st, _ = model.parse_profile({})
+        self.assertEqual((st["countdown_s"], st["pause_on_switch"]), (3, True))
+
+    def test_countdown_range(self):
+        for bad in (-1, 31, 1.5, True, "3", None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                model.parse_profile({"settings": {"countdown_s": bad}})
+        for ok in (0, 30):
+            self.assertEqual(model.parse_profile({"settings": {"countdown_s": ok}})[1]["countdown_s"], ok)
+
+    def test_pause_on_switch_must_be_bool(self):
+        for bad in ("yes", 1, 0, None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                model.parse_profile({"settings": {"pause_on_switch": bad}})
+        self.assertIs(
+            model.parse_profile({"settings": {"pause_on_switch": False}})[1]["pause_on_switch"], False
+        )
 
 
 if __name__ == "__main__":

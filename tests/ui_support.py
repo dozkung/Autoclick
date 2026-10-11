@@ -62,6 +62,7 @@ class FakeApp(app_mod.App):
         self.def_delay_unit = FakeVar("ms")
         self.def_repeat = FakeVar(1)
         self.hover = FakeVar(50)
+        self.countdown, self.pause_switch = FakeVar(3), FakeVar(True)
         self.show_markers = FakeVar(True)
         self.markers_suspended = False
         self.smooth_markers, self._marker_warned, self.marker_scale = False, False, 1.0

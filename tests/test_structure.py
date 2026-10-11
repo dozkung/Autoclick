@@ -62,6 +62,27 @@ print("LOADED", sorted(m for m in sys.modules if m.split(".")[0] in ("tkinter", 
         self.assertIn("LOADED []", out)
 
 
+class LogicTestsNeedNoStubsTests(unittest.TestCase):
+    def test_logic_test_files_import_without_tkinter_or_pynput(self):
+        # บล็อก tkinter/pynput ทั้งหมด แล้ว import ไฟล์เทสต์ที่สัญญาว่าไม่ต้อง stub
+        # (เคยพลาด: test_model ไป import runner ซึ่งดึง pynput มา บน CI ที่ไม่มีจอจะพัง)
+        for test_file in ("test_model", "test_screen", "test_hotkeys"):
+            with self.subTest(test_file=test_file):
+                code, out = run_py(f"""
+import sys
+class Block:
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] in ("tkinter", "_tkinter", "pynput"):
+            raise ImportError("blocked " + name)
+sys.meta_path.insert(0, Block())
+sys.path.insert(0, {TESTS!r})
+import {test_file}
+print("OK")
+""")
+                self.assertEqual(code, 0, out)
+                self.assertIn("OK", out)
+
+
 class NoCircularImportTests(unittest.TestCase):
     MODULES = (
         "autoclicker",

@@ -137,7 +137,17 @@ class FakeMouse:
 
 
 def cfg(**kw):
-    c = {"mode": "loop", "rounds": 1, "minutes": 5.0, "jitter_px": 0, "jitter_ms": 0, "hover_ms": 0}
+    # นับถอยหลัง/หยุดเมื่อสลับหน้าต่างปิดไว้ก่อน เทสต์ที่ต้องใช้ค่อยเปิดเอง
+    c = {
+        "mode": "loop",
+        "rounds": 1,
+        "minutes": 5.0,
+        "jitter_px": 0,
+        "jitter_ms": 0,
+        "hover_ms": 0,
+        "countdown_s": 0,
+        "pause_on_switch": False,
+    }
     c.update(kw)
     return c
 
@@ -191,3 +201,24 @@ def special_key(vk):
 
 def hk(vk, *mods):
     return {"mods": list(mods), "vk": vk}
+
+
+class FakeWindows:
+    """แทน foreground_window / is_window / window_pid ของ Windows เปลี่ยนค่าได้ระหว่างเทสต์
+    ค่าเริ่มต้น: หน้าต่างเกม GAME อยู่ข้างหน้า เป็นของ process อื่น"""
+
+    GAME, OTHER = 1001, 2002
+
+    def __init__(self, foreground=GAME, pids=None):
+        self.foreground = foreground
+        self.closed = set()
+        self.pids = pids or {}
+
+    def foreground_window(self):
+        return self.foreground
+
+    def is_window(self, hwnd):
+        return hwnd not in self.closed
+
+    def window_pid(self, hwnd):
+        return self.pids.get(hwnd, 99999)

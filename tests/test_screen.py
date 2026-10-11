@@ -1,5 +1,6 @@
 """เทสต์ screen: โซน kill switch และขอบ virtual screen (ไม่ต้อง stub tkinter/pynput)"""
 
+import sys
 import unittest
 
 import support  # noqa: F401  (import เพื่อตั้ง sys.path ให้ import autoclicker ได้)
@@ -31,6 +32,25 @@ class ScreenRectTests(unittest.TestCase):
             self.assertFalse(screen.out_of_screen(*xy, rect), xy)
         for xy in [(-1921, 0), (1920, 0), (0, -1), (0, 1080)]:
             self.assertTrue(screen.out_of_screen(*xy, rect), xy)
+
+
+class ForegroundWindowTests(unittest.TestCase):
+    def test_non_windows_disables_feature(self):
+        orig = sys.platform
+        sys.platform = "linux"
+        try:
+            self.assertIsNone(screen.foreground_window())
+        finally:
+            sys.platform = orig
+
+    @unittest.skipUnless(sys.platform == "win32", "ต้องใช้ user32 จริง")
+    def test_real_api_on_windows(self):
+        hwnd = screen.foreground_window()
+        if hwnd is None:  # เครื่องล็อกอยู่ / ไม่มีหน้าต่างข้างหน้า
+            self.skipTest("ไม่มีหน้าต่างข้างหน้า")
+        self.assertTrue(screen.is_window(hwnd))
+        self.assertIsInstance(screen.window_pid(hwnd), int)
+        self.assertFalse(screen.is_window(0x7FFFFFF0))  # HWND ที่ไม่มีอยู่จริง
 
 
 if __name__ == "__main__":
