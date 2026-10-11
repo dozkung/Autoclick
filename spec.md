@@ -1,6 +1,6 @@
 # AutoClicker (Windows) — Spec
 
-> สเปกนี้สำหรับให้ Claude Code พัฒนาต่อ ถ้ามี `autoclicker.py` อยู่ในโฟลเดอร์แล้ว ให้ใช้เป็น reference implementation แล้วแก้ให้ตรงสเปก ไม่ต้องเขียนใหม่ทั้งหมด
+> สเปกนี้สำหรับให้ Claude Code พัฒนาต่อ โค้ดที่มีอยู่ (`main.py` + package `autoclicker/` ดูหัวข้อ 3) เป็น reference implementation ให้แก้ให้ตรงสเปก ไม่ต้องเขียนใหม่ทั้งหมด
 
 ## 1. เป้าหมาย
 
@@ -24,14 +24,42 @@
 ## 3. โครงไฟล์
 
 ```
+main.py                  # entry point: ตั้ง DPI awareness ก่อน แล้วค่อย import ที่เหลือ, main()
 autoclicker/
-├── autoclicker.py      # entry point (แยก module ได้ถ้าอยากทำ ดูหัวข้อ 9)
-├── requirements.txt    # pynput>=1.7.6
-├── build.bat           # สร้าง dist\AutoClicker.exe
-├── tests/
-│   └── test_runner.py  # เทสต์ logic โดยใช้ fake mouse ไม่ต้องมีจอจริง
-└── spec.md
+├── __init__.py          # ว่าง (ห้าม import submodule: main.py ต้องตั้ง DPI ก่อน tkinter/pynput)
+├── constants.py         # ค่าคงที่ทั้งหมด (MIN_DELAY_MS, สีหมุด, DEFAULT_HOTKEYS ...) ไม่ import อะไร
+├── win32.py             # struct / ค่าคงที่ / WinDLL (argtypes ครบ) ของ Win32 ที่ใช้ร่วมกัน
+├── screen.py            # _set_dpi_aware, get_virtual_origin/rect, in_corner, out_of_screen, window_dpi_scale
+├── model.py             # make_step, validate_step, parse_profile, to_ms, pick_unit, format_duration,
+│                        #   step_row, step_from_form, try_move_step
+├── hotkeys.py           # key_to_vk, HotkeyMatcher, read_modifiers_async, load/save_hotkeys, hotkey_labels
+├── runner.py            # Runner, nudge_mouse, format_status
+├── markers.py           # render_marker_image, layered window (Win32), Marker, marker_geometry
+└── ui/
+    ├── app.py           # App
+    └── dialogs.py       # StepDialog, HotkeyDialog
+tests/
+├── support.py           # stub tkinter/pynput (install_stubs), FakeMouse, helper สร้างข้อมูล
+├── ui_support.py        # FakeApp, FakeMarker, FakeListener (import แล้วใส่ stub ให้อัตโนมัติ)
+├── test_model.py  test_screen.py  test_hotkeys.py   # ไม่ต้อง stub อะไร
+├── test_runner.py                                    # stub แค่ pynput
+├── test_markers.py  test_dialogs.py  test_app.py     # stub tkinter + pynput
+└── test_structure.py    # ห้าม tkinter ใน logic, ห้าม import วน, DPI ต้องมาก่อน
+requirements.txt         # pynput, Pillow
+requirements-dev.txt     # + ruff
+ruff.toml                # ruff format/check (line-length 110)
+build.bat                # สร้าง dist\AutoClicker.exe จาก main.py
+spec.md
 ```
+
+**กติกาการ import:**
+- `main.py` ต้องเรียก `_set_dpi_aware()` **ก่อน** import tkinter / pynput / `autoclicker.ui`
+  - `screen.py` จึงห้าม import tkinter/pynput
+  - `autoclicker/__init__.py` ห้าม import submodule
+- `model.py`, `screen.py`, `runner.py` (รวม `hotkeys.py`, `constants.py`, `win32.py`) ห้าม import tkinter เทสต์ของพวกนี้จะได้ไม่ต้อง stub tkinter
+- ทิศทาง import มีทางเดียว ห้าม import วน: `constants` / `win32` → `screen` → `model` / `hotkeys` / `runner` / `markers` → `ui.dialogs` → `ui.app` → `main.py`
+- ทุกข้อมีเทสต์ใน `tests/test_structure.py` (รันใน subprocess)
+- เทสต์ที่ monkeypatch ชื่อที่ `App` ใช้ (เช่น `Runner`, `get_virtual_rect`) ต้อง patch ที่ `autoclicker.ui.app` ซึ่งเป็นที่ที่ `App` อ่านชื่อนั้น ไม่ใช่ที่ module ต้นทาง
 
 ## 4. Data model
 
@@ -269,13 +297,13 @@ python -m pip install -r requirements.txt pyinstaller
 python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
-  autoclicker.py
+  main.py
 ```
 ต้องใส่ hidden-import เพราะ pynput เลือก backend แบบ dynamic import ถ้าไม่ใส่ exe จะเปิดแล้วปิดทันทีโดยไม่มี error ให้เห็น
 
 ## 8. Acceptance criteria
 
-### เทสต์อัตโนมัติ (`tests/test_runner.py`, รันบน CI / Linux ได้โดยไม่ต้องมีจอ)
+### เทสต์อัตโนมัติ (`tests/`, รันด้วย `python -m unittest discover -s tests` บน CI / Linux ได้โดยไม่ต้องมีจอ)
 ให้ stub `pynput` กับ `tkinter` แล้วเทสต์ `Runner` ด้วย fake mouse ที่บันทึก log การคลิกไว้:
 
 - [ ] 3 จุด (`left`, `right`, `double`) × `count=3` → คลิก 9 ครั้ง ตามลำดับ ที่พิกัดถูก จบด้วย reason `ครบ 3 รอบ`
@@ -296,7 +324,6 @@ python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker ^
 
 ## 9. งานต่อ (optional — ทำหลังข้อ 8 ผ่านหมดแล้ว)
 
-- แยก module: `model.py` (Step, validate, I/O), `runner.py` (Runner), `ui.py` (App, StepDialog), `main.py` เพื่อให้เทสต์ไม่ต้อง stub tkinter
 - จำ path ของโปรไฟล์ล่าสุด แล้วโหลดอัตโนมัติตอนเปิดโปรแกรม
 
 ## 10. ข้อควรรู้ (ใส่ใน README ด้วย)

@@ -8,7 +8,7 @@ Auto clicker ที่ตั้งจุดคลิกได้หลายจ�
 
 ```bat
 python -m pip install -r requirements.txt
-python autoclicker.py
+python main.py
 ```
 
 ถ้าต้องการสร้างไฟล์ `.exe` ไฟล์เดียว ให้รัน `build.bat` จะได้ไฟล์ `dist\AutoClicker.exe` ที่เปิดแล้วไม่มีหน้าต่าง console
@@ -88,4 +88,14 @@ python autoclicker.py
 python -m unittest discover -s tests -v
 ```
 
-เทสต์ stub `pynput` กับ `tkinter` ไว้ จึงรันได้โดยไม่ต้องมีจอและไม่ต้องติดตั้ง pynput ส่วนเทสต์ที่วาดภาพหมุดต้องมี Pillow ถ้าไม่มีจะถูกข้าม (skip)
+ต้องรันจากโฟลเดอร์รากของโปรเจกต์ เทสต์ stub `pynput` กับ `tkinter` ไว้ จึงรันได้โดยไม่ต้องมีจอและไม่ต้องติดตั้ง pynput ส่วนเทสต์ที่วาดภาพหมุดต้องมี Pillow ถ้าไม่มีจะถูกข้าม (skip)
+
+## พัฒนาต่อ
+
+โครงไฟล์และกติกาการ import อยู่ใน `spec.md` หัวข้อ 3 จุดสำคัญคือ `main.py` ต้องตั้ง DPI awareness ก่อน import ตัวอื่น และ `model` / `screen` / `runner` ห้าม import tkinter
+
+```bat
+python -m pip install -r requirements-dev.txt
+python -m ruff format .
+python -m ruff check .
+```

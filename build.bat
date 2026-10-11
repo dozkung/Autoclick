@@ -8,7 +8,7 @@ REM Without these hidden imports the exe opens and closes silently.
 python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
-  autoclicker.py || goto :err
+  main.py || goto :err
 
 echo.
 echo Done: dist\AutoClicker.exe
