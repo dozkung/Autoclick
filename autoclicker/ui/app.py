@@ -11,6 +11,7 @@ from pynput import mouse as pmouse
 
 from ..constants import (
     APP_NAME,
+    APP_TITLE,
     CLICK_LABEL,
     CLICK_TYPES,
     DEFAULT_SETTINGS,
@@ -72,7 +73,7 @@ class App:
         self.smooth_markers = False  # ตั้งจริงใน _init_marker_mode หลังมี status bar
         self._marker_warned = False
 
-        root.title(APP_NAME)
+        root.title(APP_TITLE)
         root.minsize(640, 480)
         style = ttk.Style()
         style.configure("Treeview", rowheight=24)

@@ -11,7 +11,9 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-ถ้าต้องการสร้างไฟล์ `.exe` ไฟล์เดียว ให้รัน `build.bat` จะได้ไฟล์ `dist\AutoClicker.exe` ที่เปิดแล้วไม่มีหน้าต่าง console
+ถ้าต้องการสร้างไฟล์ `.exe` ไฟล์เดียว ให้รัน `build.bat` จะได้ไฟล์ `dist\AutoClicker-<เวอร์ชัน>.exe` (เช่น `AutoClicker-1.0.0.exe`) ที่เปิดแล้วไม่มีหน้าต่าง console เวอร์ชันตั้งที่ `APP_VERSION` ใน `autoclicker/constants.py` ที่เดียว
+
+คู่มือสำหรับคนใช้ทั่วไปอยู่ที่ [USER_GUIDE.md](USER_GUIDE.md) ประวัติเวอร์ชันอยู่ที่ [CHANGELOG.md](CHANGELOG.md) และสัญญาอนุญาตแบบ MIT ([LICENSE](LICENSE))
 
 ## วิธีใช้
 

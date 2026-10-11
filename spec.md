@@ -49,7 +49,7 @@ tests/
 requirements.txt         # pynput, Pillow
 requirements-dev.txt     # + ruff
 ruff.toml                # ruff format/check (line-length 110)
-build.bat                # สร้าง dist\AutoClicker.exe จาก main.py
+build.bat                # สร้าง dist\AutoClicker-<APP_VERSION>.exe จาก main.py
 spec.md
 ```
 
@@ -353,11 +353,15 @@ spec.md
 `build.bat`:
 ```bat
 python -m pip install -r requirements.txt pyinstaller
-python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker ^
+for /f "delims=" %%v in ('python -c "from autoclicker.constants import APP_VERSION; print(APP_VERSION)"') do set "VER=%%v"
+python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker-%VER% ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
   main.py
 ```
+- **เวอร์ชัน:** อยู่ที่ `APP_VERSION` ใน `constants.py` ที่เดียว build.bat อ่านค่านี้ไปตั้งชื่อ exe (`AutoClicker-1.0.0.exe`) และชื่อหน้าต่างคือ `APP_TITLE` = `AutoClicker v1.0.0`
+- **ห้ามใส่เวอร์ชันใน `APP_NAME`:** ค่านี้ใช้เป็นโฟลเดอร์ `%APPDATA%\AutoClicker` ถ้าใส่ ปุ่มลัดที่ผู้ใช้ตั้งไว้จะหายทุกครั้งที่อัปเดต
+- **ขึ้นเวอร์ชันใหม่:** แก้ `APP_VERSION` → เพิ่มหัวข้อใน `CHANGELOG.md` → commit → `git tag vX.Y.Z` → build → แนบ exe กับ `USER_GUIDE.md` ใน GitHub Release
 ต้องใส่ hidden-import เพราะ pynput เลือก backend แบบ dynamic import ถ้าไม่ใส่ exe จะเปิดแล้วปิดทันทีโดยไม่มี error ให้เห็น
 
 ## 8. Acceptance criteria
@@ -379,7 +383,7 @@ python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker ^
 - [ ] ปุ่มลัดเริ่ม/หยุด (ค่าเริ่มต้น F6) ใช้ได้ ทั้งตอนที่หน้าต่างโปรแกรม focus อยู่และไม่ได้ focus
 - [ ] ลากเมาส์ไปมุมซ้ายบนระหว่างรัน → หยุดทันที
 - [ ] Save → ปิดโปรแกรม → Load → ได้ข้อมูลเดิมครบ
-- [ ] `build.bat` สร้าง `dist\AutoClicker.exe` ที่ดับเบิลคลิกแล้วใช้งานได้ ไม่มีหน้าต่าง console
+- [ ] `build.bat` สร้าง `dist\AutoClicker-<APP_VERSION>.exe` ที่ดับเบิลคลิกแล้วใช้งานได้ ไม่มีหน้าต่าง console
 
 ## 9. งานต่อ (optional — ทำหลังข้อ 8 ผ่านหมดแล้ว)
 

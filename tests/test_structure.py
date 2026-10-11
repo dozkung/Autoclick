@@ -145,5 +145,25 @@ print("CALLS", calls)
         self.assertIn("CALLS [[]]", out)  # เรียกครั้งเดียว และตอนนั้นยังไม่มี tkinter/pynput
 
 
+class VersionTests(unittest.TestCase):
+    def test_version_and_title(self):
+        from autoclicker import constants
+
+        self.assertRegex(constants.APP_VERSION, r"^\d+\.\d+\.\d+$")
+        self.assertEqual(constants.APP_TITLE, f"AutoClicker v{constants.APP_VERSION}")
+        # APP_NAME เป็นชื่อโฟลเดอร์ settings ห้ามมีเวอร์ชัน ไม่งั้นปุ่มลัดหายทุกครั้งที่อัปเดต
+        self.assertEqual(constants.APP_NAME, "AutoClicker")
+
+    def test_build_bat_reads_version_from_constants(self):
+        # build.bat ต้องอ่านเวอร์ชันจาก constants (ที่เดียว) ไม่ใช่เขียนเลขซ้ำไว้เอง
+        code, out = run_py("from autoclicker.constants import APP_VERSION; print(APP_VERSION)")
+        self.assertEqual(code, 0, out)
+        with open(os.path.join(ROOT, "build.bat"), encoding="utf-8") as f:
+            bat = f.read()
+        self.assertIn("from autoclicker.constants import APP_VERSION", bat)
+        self.assertIn("--name AutoClicker-%VER%", bat)
+        self.assertNotIn(out.strip(), bat)
+
+
 if __name__ == "__main__":
     unittest.main()
