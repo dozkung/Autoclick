@@ -11,7 +11,22 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-ถ้าต้องการสร้างไฟล์ `.exe` ไฟล์เดียว ให้รัน `build.bat` จะได้ไฟล์ `dist\AutoClicker-<เวอร์ชัน>.exe` (เช่น `AutoClicker-1.0.0.exe`) ที่เปิดแล้วไม่มีหน้าต่าง console เวอร์ชันตั้งที่ `APP_VERSION` ใน `autoclicker/constants.py` ที่เดียว
+### สร้างไฟล์สำหรับแจก
+
+รัน `build.bat` (ดับเบิลคลิกได้) จะได้ 2 อย่าง:
+
+- `dist\AutoClicker-<เวอร์ชัน>\` เป็นโฟลเดอร์โปรแกรม ข้างในมี `AutoClicker.exe` (เปิดแล้วไม่มีหน้าต่าง console) กับไฟล์ประกอบ
+- `dist\AutoClicker-<เวอร์ชัน>.zip` คือโฟลเดอร์ข้างบนที่ zip แล้ว **ใช้ไฟล์นี้แจก**
+
+ผู้ใช้ต้องแตก zip ก่อน แล้วเปิด `AutoClicker.exe` ในโฟลเดอร์ **ห้ามย้าย exe ออกจากโฟลเดอร์** เพราะ exe ต้องใช้ไฟล์อื่นในโฟลเดอร์ (โฟลเดอร์ `_internal`)
+
+ทำไมแจกเป็นโฟลเดอร์ ไม่ใช่ exe ไฟล์เดียว: เพื่อลดโอกาสที่ Windows Defender จะจับผิดตัว (false positive)
+
+- **onedir แทน onefile:** exe ไฟล์เดียว (`--onefile`) ต้องแตกตัวเองลง `%TEMP%` ทุกครั้งที่เปิด ซึ่งพฤติกรรมเหมือนมัลแวร์ประเภท dropper
+- **มี version resource:** ชื่อบริษัท, คำอธิบาย และเวอร์ชัน สร้างใหม่ทุกครั้งจาก `APP_VERSION` โดย `tools/make_version_info.py`
+- **ไม่บีบอัดด้วย UPX** (`--noupx`)
+
+เวอร์ชันตั้งที่ `APP_VERSION` ใน `autoclicker/constants.py` ที่เดียว
 
 คู่มือสำหรับคนใช้ทั่วไปอยู่ที่ [USER_GUIDE.md](USER_GUIDE.md) ประวัติเวอร์ชันอยู่ที่ [CHANGELOG.md](CHANGELOG.md) และสัญญาอนุญาตแบบ MIT ([LICENSE](LICENSE))
 

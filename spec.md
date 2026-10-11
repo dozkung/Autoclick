@@ -16,7 +16,7 @@
 | UI | `tkinter` + `ttk` (มากับ Python) |
 | คุมเมาส์ + global hotkey | `pynput` |
 | วาดหมุดขอบเนียน | `Pillow` (ถ้าไม่มี ใช้หมุดแบบธรรมดาแทน ดู 5.8) |
-| แพ็ก | PyInstaller (`--onefile --noconsole`) |
+| แพ็ก | PyInstaller (`--onedir --noconsole --noupx` + version resource) แจกเป็น zip (ดูหัวข้อ 7) |
 | ไฟล์โปรไฟล์ | JSON (UTF-8) |
 
 ห้ามเพิ่ม dependency อื่น ถ้าไม่จำเป็นจริงๆ
@@ -49,7 +49,9 @@ tests/
 requirements.txt         # pynput, Pillow
 requirements-dev.txt     # + ruff
 ruff.toml                # ruff format/check (line-length 110)
-build.bat                # สร้าง dist\AutoClicker-<APP_VERSION>.exe จาก main.py
+build.bat                # สร้าง dist\AutoClicker-<APP_VERSION>\AutoClicker.exe (onedir) + .zip จาก main.py
+tools/make_version_info.py  # สร้าง build\version_info.txt (version resource ของ exe) จาก APP_VERSION ทุก build
+assets/app.ico           # ไอคอน exe
 spec.md
 ```
 
@@ -354,15 +356,30 @@ spec.md
 ```bat
 python -m pip install -r requirements.txt pyinstaller
 for /f "delims=" %%v in ('python -c "from autoclicker.constants import APP_VERSION; print(APP_VERSION)"') do set "VER=%%v"
-python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker-%VER% ^
+python tools\make_version_info.py build\version_info.txt
+python -m PyInstaller --noconfirm --onedir --noconsole --noupx --name AutoClicker ^
+  --version-file build\version_info.txt ^
   --hidden-import pynput.keyboard._win32 ^
   --hidden-import pynput.mouse._win32 ^
+  --icon assets\app.ico ^
   main.py
+move dist\AutoClicker dist\AutoClicker-%VER%
+powershell Compress-Archive -Path dist\AutoClicker-%VER% -DestinationPath dist\AutoClicker-%VER%.zip
 ```
-- **เวอร์ชัน:** อยู่ที่ `APP_VERSION` ใน `constants.py` ที่เดียว build.bat อ่านค่านี้ไปตั้งชื่อ exe (`AutoClicker-1.0.0.exe`) และชื่อหน้าต่างคือ `APP_TITLE` = `AutoClicker v1.0.0`
+- **ผลลัพธ์:**
+  - `dist\AutoClicker-<VER>\AutoClicker.exe` พร้อมโฟลเดอร์ `_internal` ซึ่ง exe ต้องอยู่คู่กับโฟลเดอร์นี้เสมอ
+  - `dist\AutoClicker-<VER>.zip` คือไฟล์ที่ใช้แจก
+  - ชื่อ exe คงเป็น `AutoClicker.exe` (ตามที่ USER_GUIDE บอกผู้ใช้) มีแค่ชื่อโฟลเดอร์และ zip ที่ใส่เวอร์ชัน
+- **ลด false positive ของ Defender:**
+  - `--onedir` แทน `--onefile` เพราะ onefile ต้องแตกตัวเองลง `%TEMP%` ทุกครั้งที่เปิด ซึ่งดูเหมือน dropper
+  - `--noupx` เพราะ exe ที่ถูก UPX บีบอัดโดนจับมากกว่า
+  - `--version-file` ใส่ version resource (CompanyName, FileDescription, ProductName, FileVersion, ProductVersion, OriginalFilename, LegalCopyright)
+    - `tools/make_version_info.py` สร้างไฟล์นี้ใหม่ทุก build จาก `APP_VERSION` ห้าม hardcode หรือ commit `version_info.txt`
+- **เวอร์ชัน:** อยู่ที่ `APP_VERSION` ใน `constants.py` ที่เดียว build.bat อ่านค่านี้ไปตั้งชื่อโฟลเดอร์และ zip (`AutoClicker-1.0.1`) ส่วนชื่อหน้าต่างคือ `APP_TITLE` = `AutoClicker v1.0.1`
 - **ห้ามใส่เวอร์ชันใน `APP_NAME`:** ค่านี้ใช้เป็นโฟลเดอร์ `%APPDATA%\AutoClicker` ถ้าใส่ ปุ่มลัดที่ผู้ใช้ตั้งไว้จะหายทุกครั้งที่อัปเดต
-- **ขึ้นเวอร์ชันใหม่:** แก้ `APP_VERSION` → เพิ่มหัวข้อใน `CHANGELOG.md` → commit → `git tag vX.Y.Z` → build → แนบ exe กับ `USER_GUIDE.md` ใน GitHub Release
-ต้องใส่ hidden-import เพราะ pynput เลือก backend แบบ dynamic import ถ้าไม่ใส่ exe จะเปิดแล้วปิดทันทีโดยไม่มี error ให้เห็น
+- **ขึ้นเวอร์ชันใหม่:** แก้ `APP_VERSION` → เพิ่มหัวข้อใน `CHANGELOG.md` → commit → `git tag vX.Y.Z` → build → แนบ zip กับ `USER_GUIDE.md` ใน GitHub Release
+- **hidden-import:** ต้องใส่ เพราะ pynput เลือก backend แบบ dynamic import ถ้าไม่ใส่ exe จะเปิดแล้วปิดทันทีโดยไม่มี error ให้เห็น
+- **การทดสอบ:** ตัวเลือกพวกนี้มีเทสต์ใน `tests/test_build.py`
 
 ## 8. Acceptance criteria
 
@@ -383,7 +400,7 @@ python -m PyInstaller --noconfirm --onefile --noconsole --name AutoClicker-%VER%
 - [ ] ปุ่มลัดเริ่ม/หยุด (ค่าเริ่มต้น F6) ใช้ได้ ทั้งตอนที่หน้าต่างโปรแกรม focus อยู่และไม่ได้ focus
 - [ ] ลากเมาส์ไปมุมซ้ายบนระหว่างรัน → หยุดทันที
 - [ ] Save → ปิดโปรแกรม → Load → ได้ข้อมูลเดิมครบ
-- [ ] `build.bat` สร้าง `dist\AutoClicker-<APP_VERSION>.exe` ที่ดับเบิลคลิกแล้วใช้งานได้ ไม่มีหน้าต่าง console
+- [ ] `build.bat` สร้าง `dist\AutoClicker-<APP_VERSION>.zip` แตกแล้วเปิด `AutoClicker.exe` ในโฟลเดอร์ได้ ไม่มีหน้าต่าง console (Properties → Details มีเวอร์ชันและชื่อโปรแกรม)
 
 ## 9. งานต่อ (optional — ทำหลังข้อ 8 ผ่านหมดแล้ว)
 

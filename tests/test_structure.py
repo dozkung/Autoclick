@@ -161,7 +161,7 @@ class VersionTests(unittest.TestCase):
         with open(os.path.join(ROOT, "build.bat"), encoding="utf-8") as f:
             bat = f.read()
         self.assertIn("from autoclicker.constants import APP_VERSION", bat)
-        self.assertIn("--name AutoClicker-%VER%", bat)
+        self.assertIn('"dist\\AutoClicker-%VER%"', bat)  # ชื่อโฟลเดอร์ onedir มีเวอร์ชัน
         self.assertNotIn(out.strip(), bat)
 
 
